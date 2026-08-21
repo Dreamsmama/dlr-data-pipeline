@@ -1,0 +1,19 @@
+{
+  "name": "dlr-data-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @dlr/web --filter @dlr/api dev",
+    "dev:web": "pnpm --filter @dlr/web dev",
+    "dev:api": "pnpm --filter @dlr/api dev",
+    "dev:internal": "pnpm --filter @dlr/internal-collector dev",
+    "dev:ecommerce": "pnpm --filter @dlr/ecommerce-collector dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.2"
+  }
+}
