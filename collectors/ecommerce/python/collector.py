@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES)
     parser.add_argument("--wait-ms", type=int, default=DEFAULT_WAIT_MS)
     parser.add_argument("--export-csv", type=Path, help="训练图像清单 CSV 路径，默认输出到 out/training_manifest.csv")
-    return parser.parse_args()
+    return parser.parse_args([argument for argument in sys.argv[1:] if argument != "--"])
 
 
 def ensure_dir(path: Path) -> None:

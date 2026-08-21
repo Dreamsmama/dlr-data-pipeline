@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>淘宝店铺采集控制台</title>
+    <link rel="stylesheet" href="control.css">
+  </head>
+  <body data-status="idle">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">PUBLIC STORE DATA</p>
+        <h1>淘宝店铺采集控制台</h1>
+      </div>
+      <span id="status-badge" class="status-badge">空闲</span>
+    </header>
+
+    <main class="workspace">
+      <section class="settings" aria-labelledby="settings-title">
+        <h2 id="settings-title">采集参数</h2>
+        <form id="collector-form">
+          <label class="field field-wide">
+            <span>店铺列表页 URL</span>
+            <input id="shop-url" name="shopUrl" type="url" required autocomplete="off" placeholder="https://example.tmall.com/category.htm">
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>列表页数</span>
+              <input id="max-pages" name="maxPages" type="number" min="1" max="20" value="1" required>
+            </label>
+            <label class="field">
+              <span>商品上限</span>
+              <input id="max-products" name="maxProducts" type="number" min="1" max="200" value="20" required>
+            </label>
+            <label class="field">
+              <span>每商品图片上限</span>
+              <input id="max-images" name="maxImages" type="number" min="1" max="200" value="40" required>
+            </label>
+            <label class="field">
+              <span>页面等待（毫秒）</span>
+              <input id="wait-ms" name="waitMs" type="number" min="1000" max="60000" step="500" value="3500" required>
+            </label>
+          </div>
+
+          <div class="primary-actions">
+            <button id="start-button" class="button button-primary" type="submit">开始采集</button>
+            <button id="stop-button" class="button button-danger" type="button" disabled>停止</button>
+            <button id="continue-button" class="button button-warning" type="button" hidden>验证后继续</button>
+          </div>
+        </form>
+
+        <div class="secondary-actions" aria-label="辅助操作">
+          <button id="focus-button" class="button button-secondary" type="button" disabled>定位采集页</button>
+          <button id="export-button" class="button button-secondary" type="button" disabled>导出 JSON</button>
+          <button id="reset-button" class="button button-quiet" type="button">重置</button>
+        </div>
+      </section>
+
+      <section class="run" aria-labelledby="run-title">
+        <div class="run-heading">
+          <div>
+            <p class="eyebrow">RUN STATUS</p>
+            <h2 id="run-title">采集进度</h2>
+          </div>
+          <span id="phase-label">等待开始</span>
+        </div>
+
+        <progress id="progress" max="1" value="0"></progress>
+        <div class="metrics" aria-label="采集统计">
+          <div><strong id="metric-pages">0</strong><span>列表页</span></div>
+          <div><strong id="metric-discovered">0</strong><span>已发现</span></div>
+          <div><strong id="metric-products">0</strong><span>已采集</span></div>
+          <div><strong id="metric-failures">0</strong><span>失败</span></div>
+        </div>
+
+        <dl class="current-item">
+          <div>
+            <dt>状态码</dt>
+            <dd id="status-code">idle</dd>
+          </div>
+          <div>
+            <dt>当前页面</dt>
+            <dd id="current-url">-</dd>
+          </div>
+          <div>
+            <dt>最近消息</dt>
+            <dd id="status-message">尚未开始</dd>
+          </div>
+        </dl>
+
+        <div id="needs-user" class="notice notice-warning" hidden role="alert">
+          <strong>需要人工处理</strong>
+          <span>请在采集页完成登录或安全验证，再返回此处继续。</span>
+        </div>
+
+        <div class="results-heading">
+          <h3>最近结果</h3>
+          <span id="run-id">-</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>商品 ID</th>
+                <th>标题</th>
+                <th>图片</th>
+              </tr>
+            </thead>
+            <tbody id="results-body">
+              <tr><td colspan="3" class="empty-row">暂无结果</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <details class="event-log">
+          <summary>运行记录</summary>
+          <ol id="log-list"></ol>
+        </details>
+      </section>
+    </main>
+
+    <script type="module" src="control.js"></script>
+  </body>
+</html>

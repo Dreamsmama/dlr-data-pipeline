@@ -7,13 +7,24 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "pnpm --filter @dlr/schemas build && pnpm --filter @dlr/database build && pnpm --filter @dlr/storage build && tsc -p tsconfig.json --noEmit",
+    "collect:python": "python python/collector.py",
+    "extension:start": "node scripts/start-extension-browser.js",
+    "extension:run": "node scripts/run-extension.js",
+    "extension:import": "python scripts/import-extension-export.py",
+    "extension:retry-images": "python scripts/retry-failed-images.py",
     "import:data": "pnpm --filter @dlr/schemas build && pnpm --filter @dlr/database build && pnpm --filter @dlr/storage build && tsx src/index.ts",
-    "test:database": "pnpm --filter @dlr/schemas build && pnpm --filter @dlr/database build && pnpm --filter @dlr/storage build && tsx tests/database-smoke.ts"
+    "test:database": "pnpm --filter @dlr/schemas build && pnpm --filter @dlr/database build && pnpm --filter @dlr/storage build && tsx tests/database-smoke.ts",
+    "test:python": "python -m unittest discover -s tests/python -p test_*.py",
+    "test:extractor": "node tests/extractor-smoke.js",
+    "test:extension-ui": "node tests/extension-ui-smoke.js",
+    "test:extension-import": "python tests/import-export-smoke.py",
+    "test:collectors": "pnpm test:python && pnpm test:extractor && pnpm test:extension-import && pnpm test:extension-ui"
   },
   "dependencies": {
     "@dlr/database": "workspace:*",
     "@dlr/schemas": "workspace:*",
-    "@dlr/storage": "workspace:*"
+    "@dlr/storage": "workspace:*",
+    "playwright": "^1.62.1"
   },
   "devDependencies": { "tsx": "^4.20.5" }
 }

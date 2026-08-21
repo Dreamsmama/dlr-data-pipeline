@@ -10,6 +10,54 @@
 4. 主要修改本目录；不要直接修改 `collectors/internal`。
 5. 建业务表时，在 `packages/database/migrations` 添加迁移并提交评审。
 
+## 采集方式
+
+两种采集器输出同一种标准目录结构，后续统一交给 importer 处理。采集器只读取公开页面，遇到登录或安全验证时暂停，不自动处理验证码。
+
+### 方式一：Python + Playwright 直接采集
+
+适合可以稳定访问的公开商品页，也可以通过商品 URL 清单执行小批量采集。
+
+```bash
+python -m pip install -r collectors/ecommerce/requirements.txt
+python -m playwright install chromium
+pnpm collect:ecommerce:python -- \
+  --shop-url "https://example.tmall.com/category.htm" \
+  --headed \
+  --max-pages 3 \
+  --max-products 200 \
+  --max-images 150
+```
+
+### 方式二：Chrome 扩展采集
+
+推荐在用户自己的 Chrome 会话中运行。先启动带扩展的专用 Chrome；脚本按 `--executable-path`、`CHROME_PATH`、系统常见安装目录的顺序寻找浏览器。
+
+```bash
+pnpm extension:ecommerce:start
+pnpm extension:ecommerce:run -- \
+  --shop-url "https://example.tmall.com/category.htm" \
+  --max-pages 1 \
+  --max-products 20 \
+  --manual-wait
+```
+
+也可以在 `chrome://extensions` 中启用开发者模式，手动加载 `collectors/ecommerce/extension`。导出后转换为标准目录：
+
+```bash
+pnpm --filter @dlr/ecommerce-collector extension:import -- \
+  data/extension/latest.json \
+  --out data/extension/catalog
+```
+
+生成的数据、浏览器 profile、SQLite 和测试截图均被 `.gitignore` 排除，不得提交 Cookie、账号信息或真实密钥。
+
+运行采集器测试：
+
+```bash
+pnpm test:ecommerce-collectors
+```
+
 ## 蒂洛薇 Tmall 数据导入
 
 Importer 读取标准化数据目录中的 `products/<item_id>/product.json`，图片按 SHA256 上传到私有 OSS，

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "淘宝店铺公开信息采集助手",
+  "version": "0.1.0",
+  "description": "在用户已登录的 Chrome 会话中低频采集公开展示的淘宝/天猫商品信息。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "scripting",
+    "storage",
+    "tabs",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://*.taobao.com/*",
+    "https://*.tmall.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "打开淘宝采集控制台"
+  }
+}

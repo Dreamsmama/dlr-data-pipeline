@@ -9,7 +9,11 @@
     "dev:api": "pnpm --filter @dlr/api dev",
     "dev:internal": "pnpm --filter @dlr/internal-collector dev",
     "dev:ecommerce": "pnpm --filter @dlr/ecommerce-collector dev",
+    "collect:ecommerce:python": "pnpm --filter @dlr/ecommerce-collector collect:python",
+    "extension:ecommerce:start": "pnpm --filter @dlr/ecommerce-collector extension:start",
+    "extension:ecommerce:run": "pnpm --filter @dlr/ecommerce-collector extension:run",
     "import:ecommerce": "pnpm --filter @dlr/ecommerce-collector import:data",
+    "test:ecommerce-collectors": "pnpm --filter @dlr/ecommerce-collector test:collectors",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck"
   },
