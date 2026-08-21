@@ -9,6 +9,7 @@
     "dev:api": "pnpm --filter @dlr/api dev",
     "dev:internal": "pnpm --filter @dlr/internal-collector dev",
     "dev:ecommerce": "pnpm --filter @dlr/ecommerce-collector dev",
+    "import:ecommerce": "pnpm --filter @dlr/ecommerce-collector import:data",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck"
   },
