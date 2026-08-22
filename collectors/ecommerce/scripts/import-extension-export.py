@@ -94,7 +94,7 @@ def to_extracted(product: dict[str, Any], max_images: int) -> dict[str, Any]:
         "attributes": product.get("attributes", {}),
         "image_candidates": candidates,
         "json_ld": raw.get("json_ld", []),
-        "html": "",
+        "html": raw.get("html", ""),
     }
 
 

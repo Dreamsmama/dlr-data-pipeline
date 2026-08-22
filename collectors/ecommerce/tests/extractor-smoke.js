@@ -27,6 +27,7 @@ try {
   assert.equal(listing.items.length, 2);
   assert.equal(listing.items[0].item_id, "10001");
   assert.equal(listing.items[0].url, "https://detail.tmall.com/item.htm?id=10001");
+  assert.equal(listing.items[0].navigation_url, "https://detail.tmall.com/item.htm?id=10001&spm=test");
   assert.equal(listing.next_url, "https://shop.example.tmall.com/category.htm?pageNo=2");
 
   await page.setContent(`
@@ -107,6 +108,7 @@ try {
   assert.equal(product.image_candidates.length, 2);
   assert.equal(product.image_candidates[0].image_type, "main");
   assert.equal(product.image_candidates[1].image_type, "sku");
+  assert.match(product.html, /detail-description/);
 
   await page.setContent("<html><body>请完成安全验证</body></html>");
   const blocked = await page.evaluate(extractPageInTab, { mode: "product" });

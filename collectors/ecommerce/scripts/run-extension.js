@@ -10,7 +10,7 @@ const EXTENSION_PATH = path.join(PACKAGE_ROOT, "extension");
 
 function printUsage() {
   console.log(`Usage:
-  node scripts/run-extension.js --shop-url <url> [options]
+  node scripts/run-extension.js --shop-url <store-or-product-url> [options]
   node scripts/run-extension.js --resume [options]
 
 Connection (attach mode is recommended):
@@ -95,7 +95,7 @@ function validateArgs(args) {
   if (args.shopUrl) {
     const url = new URL(args.shopUrl);
     if (url.protocol !== "https:" || !/(^|\.)(?:taobao|tmall)\.com$/i.test(url.hostname)) {
-      throw new Error("--shop-url must be an HTTPS Taobao or Tmall URL");
+      throw new Error("--shop-url must be an HTTPS Taobao or Tmall store/product URL");
     }
   }
   for (const [name, value, minimum, maximum] of [
@@ -113,7 +113,10 @@ function validateArgs(args) {
 
 async function findControlPage(context, extensionId) {
   const controlPages = context.pages().filter((page) => /^chrome-extension:\/\/[^/]+\/control\.html/.test(page.url()));
-  if (controlPages.length > 0) return controlPages[0];
+  if (controlPages.length > 0) {
+    await controlPages[0].reload();
+    return controlPages[0];
+  }
 
   let resolvedId = extensionId;
   if (!resolvedId) {

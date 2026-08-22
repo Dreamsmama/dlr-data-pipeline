@@ -43,7 +43,7 @@ def main() -> None:
                         "height": 800,
                     }
                 ],
-                "raw": {"json_ld": []},
+                "raw": {"json_ld": [], "html": "<!doctype html><title>原始商品页</title>"},
                 "provenance": {
                     "fetched_url": "https://detail.tmall.com/item.htm?id=10001",
                     "collector": "chrome_extension",
@@ -74,6 +74,8 @@ def main() -> None:
         product = json.loads((out_dir / "products" / "10001" / "product.json").read_text(encoding="utf-8"))
         assert product["title"] == "扩展导入测试商品"
         assert product["images"][0]["status"] == "remote_only"
+        raw_html_path = out_dir / "products" / "10001" / "raw.html"
+        assert raw_html_path.read_text(encoding="utf-8") == payload["products"][0]["raw"]["html"]
         assert (out_dir / "training_manifest.csv").is_file()
         with closing(sqlite3.connect(out_dir / "catalog.sqlite3")) as connection:
             row = connection.execute("SELECT title, image_count FROM products WHERE item_id = ?", ("10001",)).fetchone()

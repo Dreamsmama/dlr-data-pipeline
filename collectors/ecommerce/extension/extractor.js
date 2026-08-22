@@ -1,7 +1,7 @@
 export async function extractPageInTab(options) {
   const mode = options?.mode === "list" ? "list" : "product";
   const maxImages = Math.max(1, Math.min(Number(options?.maxImages) || 80, 200));
-  const scrollDelayMs = Math.max(100, Math.min(Number(options?.scrollDelayMs) || 800, 3000));
+  const scrollDelayMs = Math.max(100, Math.min(Number(options?.scrollDelayMs) || 250, 500));
 
   const cleanText = (value, limit = 100000) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
 
@@ -90,6 +90,7 @@ export async function extractPageInTab(options) {
       links.push({
         item_id: itemId,
         url: canonical,
+        navigation_url: normalized,
         anchor_text: cleanText(anchor.textContent, 1000),
         listing_text: cleanText(card.textContent, 3000)
       });
@@ -115,9 +116,28 @@ export async function extractPageInTab(options) {
   }
 
   const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-  for (const fraction of [0.35, 0.7, 1]) {
-    window.scrollTo(0, Math.max(0, document.body.scrollHeight * fraction));
+  const detailTrigger = [...document.querySelectorAll("button, a, [role='button'], [role='tab'], span, p")]
+    .find((element) => cleanText(element.textContent, 100) === "图文详情"
+      && element.getBoundingClientRect().width > 0
+      && element.getBoundingClientRect().height > 0);
+  if (detailTrigger) {
+    detailTrigger.scrollIntoView({ block: "center" });
     await wait(scrollDelayMs);
+    detailTrigger.click();
+    await wait(scrollDelayMs);
+  }
+
+  window.scrollTo(0, 0);
+  let stableBottomRounds = 0;
+  let previousHeight = document.documentElement.scrollHeight;
+  for (let step = 0; step < 30; step += 1) {
+    window.scrollBy(0, Math.max(600, window.innerHeight * 0.8));
+    await wait(scrollDelayMs);
+    const height = document.documentElement.scrollHeight;
+    const atBottom = window.scrollY + window.innerHeight >= height - 10;
+    stableBottomRounds = atBottom && height === previousHeight ? stableBottomRounds + 1 : 0;
+    previousHeight = height;
+    if (stableBottomRounds >= 2) break;
   }
 
   const firstText = (selectors, limit = 100000) => {
@@ -200,7 +220,24 @@ export async function extractPageInTab(options) {
   title ||= firstAttribute(['meta[property="og:title"]', 'meta[name="twitter:title"]'], "content");
   title ||= firstText(["h1", '[class*="title" i]'], 10000);
   const description = firstAttribute(['meta[property="og:description"]', 'meta[name="description"]'], "content");
-  const detailText = firstText(["#description", "#J_DivItemDesc", '[id*="description" i]', '[class*="detail" i]', '[class*="desc" i]']);
+  const longestText = (selectors, limit = 100000) => {
+    let result = "";
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        const value = cleanText(element.textContent, limit);
+        if (value.length > result.length) result = value;
+      }
+    }
+    return result;
+  };
+  const detailText = longestText([
+    "#description",
+    "#J_DivItemDesc",
+    '[class*="descV8" i]',
+    '[class*="description-content" i]',
+    '[class*="detail-content" i]',
+    '[class*="aplus" i]'
+  ]);
   const skuText = firstText(["#J_SKU", '[class*="sku" i]']);
   const attributesText = firstText(['[class*="parameter" i]', '[class*="attribute" i]', '[class*="property" i]', '[class*="params" i]']);
   let priceText = firstText(['[class*="price" i]'], 5000);
@@ -232,6 +269,27 @@ export async function extractPageInTab(options) {
 
   const candidates = [];
   const seenImages = new Set();
+  const originalImageUrl = (rawUrl) => {
+    const normalized = normalizeUrl(rawUrl);
+    if (!normalized) return null;
+    const url = new URL(normalized);
+    if (!/(?:alicdn|tbcdn)\.com$/i.test(url.hostname)) return normalized;
+    const name = url.pathname.split("/").pop() || "";
+    const match = name.match(/^(.+?\.(?:jpe?g|png|gif|webp|avif))(?:_.*)?$/i);
+    if (!match) return normalized;
+    url.pathname = `${url.pathname.slice(0, -name.length)}${match[1]}`;
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  };
+  const imageAssetKey = (rawUrl) => {
+    const original = originalImageUrl(rawUrl);
+    if (!original) return null;
+    const url = new URL(original);
+    const name = (url.pathname.split("/").pop() || "").toLowerCase();
+    return name.match(/(o1cn.+?\.(?:jpe?g|png|gif|webp|avif))$/i)?.[1]?.toLowerCase()
+      || original.toLowerCase();
+  };
   const classifyImage = (candidate) => {
     if (["main", "sku", "detail", "review"].includes(candidate.source_type)) return candidate.source_type;
     const text = `${candidate.alt || ""} ${candidate.className || ""} ${candidate.url || ""}`.toLowerCase();
@@ -242,12 +300,17 @@ export async function extractPageInTab(options) {
     return "unknown";
   };
   const addImage = (candidate) => {
-    const url = normalizeUrl(candidate.url);
-    if (!url || seenImages.has(url) || /sprite|icon|avatar|logo|loading|placeholder|\/s\.gif/i.test(url)) return;
-    if (candidate.width && candidate.height && Math.min(candidate.width, candidate.height) < 256) return;
+    const url = originalImageUrl(candidate.url);
+    const assetKey = imageAssetKey(url);
+    const contextText = `${candidate.alt || ""} ${candidate.className || ""} ${candidate.context || ""} ${url || ""}`;
+    if (!url || !assetKey || seenImages.has(assetKey)) return;
+    if (/sprite|icon|avatar|logo(?:-|_|\.|\/)|loading|placeholder|sns_logo|\/s\.gif|600000000\d+-\d+-tps-|alicdn\.com\/bao\/uploaded\/i\d?\/tfscom\//i.test(url)) return;
+    if (/review|comment|rate|feed|评价|晒图|营业执照|举报中心|违法和不良信息|环保宣传|店铺资质|license|qualification/i.test(contextText)) return;
     const imageType = classifyImage({ ...candidate, url });
     if (!["main", "sku", "detail"].includes(imageType)) return;
-    seenImages.add(url);
+    if (imageType !== "detail" && candidate.width && candidate.height
+      && Math.min(candidate.width, candidate.height) < 256) return;
+    seenImages.add(assetKey);
     candidates.push({
       url,
       alt: cleanText(candidate.alt, 1000),
@@ -269,21 +332,40 @@ export async function extractPageInTab(options) {
   for (const image of document.images) {
     const ancestry = [];
     let node = image;
-    for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    for (let depth = 0; node && depth < 16; depth += 1, node = node.parentElement) {
       ancestry.push(`${node.id || ""} ${typeof node.className === "string" ? node.className : ""}`);
     }
     const context = ancestry.join(" ");
     const sourceType = /review|comment|rate|feed/i.test(context)
       ? "review"
-      : (/detail|description|desc|aplus/i.test(context) ? "detail" : "unknown");
-    addImage({
-      url: image.currentSrc || image.src || image.dataset.src || image.dataset.lazySrc,
-      alt: image.alt,
-      className: typeof image.className === "string" ? image.className : "",
-      width: image.naturalWidth || null,
-      height: image.naturalHeight || null,
-      source_type: sourceType
-    });
+      : (/picGallery|thumbnail|mainPic|headImage|product_main|主图/i.test(context)
+        ? "main"
+        : (/skuOptions|SkuPanel|skuValue|skuItem|valueItem|颜色分类/i.test(context)
+          ? "sku"
+          : (/descV8|desc-root|J_DivItemDesc|description-content|detail-content|aplus/i.test(context)
+            ? "detail"
+            : "unknown")));
+    const imageUrls = [
+      image.currentSrc,
+      image.getAttribute("src"),
+      image.getAttribute("data-ks-lazyload"),
+      image.getAttribute("data-lazyload"),
+      image.getAttribute("data-original"),
+      image.getAttribute("data-src"),
+      image.getAttribute("data-lazy-src")
+    ];
+    for (const url of imageUrls) {
+      addImage({
+        url,
+        alt: image.alt,
+        className: typeof image.className === "string" ? image.className : "",
+        context,
+        width: image.naturalWidth || Number(image.getAttribute("width")) || null,
+        height: image.naturalHeight || Number(image.getAttribute("height")) || null,
+        source_type: sourceType
+      });
+      if (candidates.length >= maxImages) break;
+    }
     if (candidates.length >= maxImages) break;
   }
 
@@ -328,6 +410,7 @@ export async function extractPageInTab(options) {
       evaluates: safeValue(sellerEvaluates, [])
     },
     image_candidates: candidates.slice(0, maxImages),
-    json_ld: jsonLd
+    json_ld: jsonLd,
+    html: document.documentElement.outerHTML
   };
 }

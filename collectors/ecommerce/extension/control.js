@@ -1,6 +1,7 @@
 import { extractPageInTab } from "./extractor.js";
 
 const STATE_KEY = "collectorStateV1";
+const RAW_PAGE_PREFIX = "rawPage:";
 const CONTROL_URL = chrome.runtime.getURL("control.html");
 const STATUS_LABELS = {
   idle: "空闲",
@@ -78,12 +79,44 @@ function createRunId() {
   return `run-${nowIso().replace(/[:.]/g, "-")}`;
 }
 
+function rawPageKey(runId, itemId) {
+  return `${RAW_PAGE_PREFIX}${runId}:${itemId}`;
+}
+
+async function removeRawPages() {
+  const stored = await chrome.storage.local.get(null);
+  const keys = Object.keys(stored).filter((key) => key.startsWith(RAW_PAGE_PREFIX));
+  if (keys.length > 0) await chrome.storage.local.remove(keys);
+}
+
 function isAllowedPageUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     return url.protocol === "https:" && /(^|\.)(?:taobao|tmall)\.com$/i.test(url.hostname);
   } catch {
     return false;
+  }
+}
+
+function productFromUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const itemId = url.searchParams.get("id");
+    if (!itemId || !/(?:item\.taobao\.com|detail\.tmall\.com)\/item\.htm$/i.test(`${url.hostname}${url.pathname}`)) {
+      return null;
+    }
+    const canonical = new URL(url);
+    canonical.search = `?id=${encodeURIComponent(itemId)}`;
+    canonical.hash = "";
+    return {
+      item_id: itemId,
+      url: canonical.href,
+      navigation_url: url.href,
+      anchor_text: "",
+      listing_text: ""
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -98,7 +131,7 @@ function boundedInteger(input, minimum, maximum) {
 function readConfig() {
   const shopUrl = elements.shopUrl.value.trim();
   if (!isAllowedPageUrl(shopUrl)) {
-    throw new Error("店铺 URL 必须是 HTTPS 淘宝或天猫页面");
+    throw new Error("采集 URL 必须是 HTTPS 淘宝或天猫页面");
   }
   return {
     shop_url: shopUrl,
@@ -365,6 +398,8 @@ async function recordProduct(item, extracted) {
     ...(item.listing_text ? ["publicly_displayed_shop_listing"] : [])
   ];
   const collectedAt = nowIso();
+  const htmlKey = rawPageKey(state.run_id, item.item_id);
+  await chrome.storage.local.set({ [htmlKey]: extracted.html || "" });
   const images = (extracted.image_candidates || []).map((image) => ({
     source_url: image.url,
     type: image.image_type,
@@ -394,7 +429,8 @@ async function recordProduct(item, extracted) {
     images,
     raw: {
       json_ld: extracted.json_ld || [],
-      image_candidates: extracted.image_candidates || []
+      image_candidates: extracted.image_candidates || [],
+      html_key: htmlKey
     },
     training: {
       caption_status: "pending_manual_review",
@@ -419,7 +455,7 @@ async function runProductStep(reuseLoadedPage) {
   }
   const item = state.product_queue[state.product_index];
   try {
-    const result = await loadAndExtract(item.url, "product", reuseLoadedPage);
+    const result = await loadAndExtract(item.navigation_url || item.url, "product", reuseLoadedPage);
     if (!result) return false;
     await recordProduct(item, result);
     state.product_index += 1;
@@ -462,16 +498,21 @@ async function startRun(event) {
   event.preventDefault();
   try {
     const config = readConfig();
+    await removeRawPages();
+    const directProduct = productFromUrl(config.shop_url);
     state = {
       ...createIdleState(),
       run_id: createRunId(),
       status: "running",
+      phase: directProduct ? "products" : "listing",
       started_at: nowIso(),
       config,
-      current_list_url: config.shop_url,
+      current_list_url: directProduct ? null : config.shop_url,
+      discovered: directProduct ? { [directProduct.item_id]: directProduct } : {},
+      product_queue: directProduct ? [directProduct] : [],
       message: "准备开始"
     };
-    addLog("创建采集任务");
+    addLog(directProduct ? `创建单商品采集任务：${directProduct.item_id}` : "创建店铺采集任务");
     await persistState();
     render();
     void runLoop();
@@ -508,7 +549,19 @@ async function focusWorkTab() {
   }
 }
 
-function exportResults() {
+async function exportResults() {
+  const products = structuredClone(state.products);
+  const htmlKeys = products.map((product) => product.raw?.html_key).filter(Boolean);
+  const storedHtml = htmlKeys.length > 0 ? await chrome.storage.local.get(htmlKeys) : {};
+  const missingKeys = htmlKeys.filter((key) => typeof storedHtml[key] !== "string");
+  if (missingKeys.length > 0) {
+    throw new Error(`原始页面数据缺失：${missingKeys.length} 个商品`);
+  }
+  for (const product of products) {
+    const htmlKey = product.raw?.html_key;
+    product.raw = { ...(product.raw || {}), html: htmlKey ? storedHtml[htmlKey] : "" };
+    delete product.raw.html_key;
+  }
   const payload = {
     schema_version: 1,
     generated_at: nowIso(),
@@ -521,7 +574,7 @@ function exportResults() {
       list_pages_collected: state.list_page_index,
       products_discovered: Object.keys(state.discovered).length
     },
-    products: state.products,
+    products,
     failures: state.failures
   };
   const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" });
@@ -543,6 +596,7 @@ async function resetRun() {
     }
   }
   state = createIdleState();
+  await removeRawPages();
   await chrome.storage.local.remove(STATE_KEY);
   render();
 }
@@ -551,7 +605,12 @@ elements.form.addEventListener("submit", startRun);
 elements.stop.addEventListener("click", () => void stopRun());
 elements.continue.addEventListener("click", () => void continueRun());
 elements.focus.addEventListener("click", () => void focusWorkTab());
-elements.export.addEventListener("click", exportResults);
+elements.export.addEventListener("click", () => {
+  void exportResults().catch((error) => {
+    state.message = `导出失败：${error.message}`;
+    render();
+  });
+});
 elements.reset.addEventListener("click", () => void resetRun());
 
 state = await loadState();
