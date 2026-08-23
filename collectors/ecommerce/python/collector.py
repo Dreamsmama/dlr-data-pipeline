@@ -29,6 +29,7 @@ DEFAULT_WAIT_MS = 2500
 DEFAULT_MAX_PAGES = 3
 DEFAULT_MAX_PRODUCTS = 200
 DEFAULT_MAX_IMAGES = 80
+ITEM_EXTRACTION_ATTEMPTS = 3
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
 
 
@@ -41,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--shop-url", help="店铺分类页或商品列表页 URL")
     source.add_argument("--items-file", type=Path, help="商品 URL 文件，每行一个 URL；支持 txt/csv/json")
+    parser.add_argument("--item-id", action="append", default=[], help="只采集指定商品 ID；可重复传入")
     parser.add_argument("--out", type=Path, default=Path("data/python"), help="输出目录")
     parser.add_argument("--storage-state", type=Path, help="Playwright storage state JSON，用于已授权的浏览器会话")
     parser.add_argument("--browser-captures", type=Path, help="已验证浏览器导出的商品图片清单目录")
@@ -447,6 +449,22 @@ async def collect_item_links(page: Page) -> list[dict[str, str]]:
         if item_score > current_score:
             result[positions[href]] = item
     return result
+
+
+def add_discovered_items(
+    discovered: dict[str, dict[str, str]],
+    items: list[dict[str, str]],
+    requested_item_ids: set[str],
+    max_products: int,
+) -> None:
+    """Select targets without replacing the listing URL used for navigation."""
+    for item in items:
+        item_id = item_id_from_url(item["url"])
+        if requested_item_ids and item_id not in requested_item_ids:
+            continue
+        discovered.setdefault(item_id, item)
+        if len(discovered) >= max_products:
+            break
 
 
 def listing_market(text: str) -> dict[str, Any]:
@@ -889,7 +907,8 @@ def save_product(
 def save_failed_product(connection: sqlite3.Connection, out_dir: Path, item_id: str, item_url: str, collected_at: str, extracted: dict[str, Any]) -> None:
     product_dir = out_dir / "products" / item_id
     ensure_dir(product_dir)
-    raw_html_path = product_dir / "raw.html"
+    failure_suffix = collected_at.replace(":", "-").replace("+", "_")
+    raw_html_path = product_dir / f"failed-{failure_suffix}.html"
     raw_html_path.write_text(extracted.get("html", ""), encoding="utf-8")
     failure = {
         "item_id": item_id,
@@ -898,7 +917,16 @@ def save_failed_product(connection: sqlite3.Connection, out_dir: Path, item_id: 
         "error": extracted.get("error", "unknown"),
         "fetched_url": extracted.get("fetched_url"),
     }
-    write_json(product_dir / "product.json", failure)
+    write_json(product_dir / f"failure-{failure_suffix}.json", failure)
+    product_json_path = product_dir / "product.json"
+    if product_json_path.is_file():
+        try:
+            existing_product = json.loads(product_json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing_product = {}
+        if existing_product and not existing_product.get("error"):
+            return
+    write_json(product_json_path, failure)
     connection.execute(
         "INSERT INTO products (item_id, source_url, fetched_url, collected_at, title, description, detail_text, sku_text, market_json, shop_json, attributes_json, image_count, caption_status, image_review_status, rights_status, raw_html_path, raw_json_path) VALUES (?, ?, ?, ?, '', '', '', '', '{}', '{}', '{}', 0, 'blocked', 'blocked', 'unknown', ?, NULL) ON CONFLICT(item_id) DO UPDATE SET collected_at=excluded.collected_at, raw_html_path=excluded.raw_html_path",
         (item_id, item_url, extracted.get("fetched_url"), collected_at, raw_html_path.relative_to(out_dir).as_posix()),
@@ -934,6 +962,7 @@ async def collect(args: argparse.Namespace) -> int:
     db.execute("INSERT INTO collection_runs (run_id, started_at, source, status) VALUES (?, ?, ?, ?)", (run_id, started_at, source, "running"))
     db.commit()
     discovered: dict[str, dict[str, str]] = {}
+    requested_item_ids = set(args.item_id)
     status = "completed"
     error_message = None
 
@@ -950,10 +979,12 @@ async def collect(args: argparse.Namespace) -> int:
         item_page = await context.new_page()
         try:
             if args.items_file:
-                for item in load_item_urls(args.items_file):
-                    if len(discovered) >= args.max_products:
-                        break
-                    discovered[item_id_from_url(item["url"])] = item
+                add_discovered_items(
+                    discovered,
+                    load_item_urls(args.items_file),
+                    requested_item_ids,
+                    args.max_products,
+                )
                 if args.manual_wait and discovered:
                     first_item = next(iter(discovered.values()))
                     await item_page.goto(first_item.get("navigation_url", first_item["url"]), wait_until="domcontentloaded", timeout=60000)
@@ -994,27 +1025,69 @@ async def collect(args: argparse.Namespace) -> int:
                         (out_dir / "list-blocked.html").write_text(await list_page.content(), encoding="utf-8")
                         print(f"list blocked: {blocked}", file=sys.stderr, flush=True)
                         break
-                    for item in await collect_item_links(list_page):
-                        discovered.setdefault(item_id_from_url(item["url"]), item)
-                        if len(discovered) >= args.max_products:
-                            break
+                    add_discovered_items(
+                        discovered,
+                        await collect_item_links(list_page),
+                        requested_item_ids,
+                        args.max_products,
+                    )
                     next_url = await find_next_page(list_page)
                     if not next_url:
                         break
                     current_url = next_url
 
+            missing_item_ids = requested_item_ids.difference(discovered)
+            if missing_item_ids:
+                status = "failed"
+                error_message = f"requested_item_ids_not_found: {','.join(sorted(missing_item_ids))}"
+                print(error_message, file=sys.stderr, flush=True)
             print(f"Discovered {len(discovered)} product link(s).", flush=True)
+            write_json(out_dir / "discovered-items.json", list(discovered.values()))
             # A challenge page or an external browser action can close the detail
             # tab while leaving the list tab usable. Recreate only that tab.
             if item_page.is_closed():
                 item_page = await context.new_page()
-            for index, (item_id, item) in enumerate(discovered.items(), start=1):
+            if args.manual_wait and discovered and not missing_item_ids and not args.items_file:
+                first_item = next(iter(discovered.values()))
+                await item_page.goto(
+                    first_item.get("navigation_url", first_item["url"]),
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                await item_page.wait_for_timeout(args.wait_ms)
+                await asyncio.to_thread(input, "请在商品详情页完成验证后按 Enter 继续：")
+                await item_page.reload(wait_until="domcontentloaded", timeout=60000)
+                await item_page.wait_for_timeout(args.wait_ms)
+                await context.storage_state(path=str(out_dir / "storage-state.json"))
+            selected_items = [] if missing_item_ids else discovered.items()
+            for index, (item_id, item) in enumerate(selected_items, start=1):
                 if item_page.is_closed():
                     item_page = await context.new_page()
                 collected_at = now_iso()
                 print(f"[item {index}/{len(discovered)}] {item_id}", flush=True)
                 navigation_url = item.get("navigation_url", item["url"])
-                extracted = await extract_item_page(item_page, navigation_url, args.wait_ms, args.max_images)
+                extracted: dict[str, Any] | None = None
+                for attempt in range(1, ITEM_EXTRACTION_ATTEMPTS + 1):
+                    if item_page.is_closed():
+                        item_page = await context.new_page()
+                    try:
+                        extracted = await extract_item_page(item_page, navigation_url, args.wait_ms, args.max_images)
+                        break
+                    except PlaywrightError as exc:
+                        if attempt == ITEM_EXTRACTION_ATTEMPTS:
+                            extracted = {
+                                "error": f"playwright_error_after_{ITEM_EXTRACTION_ATTEMPTS}_attempts: {exc}",
+                                "item_url": navigation_url,
+                                "fetched_url": None if item_page.is_closed() else item_page.url,
+                            }
+                            break
+                        print(
+                            f"  retry {attempt}/{ITEM_EXTRACTION_ATTEMPTS - 1}: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        await asyncio.sleep(1)
+                assert extracted is not None
                 if extracted.get("error"):
                     save_failed_product(db, out_dir, item_id, item["url"], collected_at, extracted)
                     print(f"  failed: {extracted['error']}", file=sys.stderr, flush=True)

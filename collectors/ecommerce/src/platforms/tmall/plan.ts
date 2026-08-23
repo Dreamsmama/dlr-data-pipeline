@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
+import { deriveEcommerceClassification } from "@dlr/schemas";
 import type {
+  EcommerceClassification,
   EcommerceAssetInput,
   EcommerceImageObservationInput,
   EcommerceObservationInput,
@@ -138,11 +140,22 @@ export async function buildImportPlan(
   const verifiedPaths = new Map<string, string>();
   let skippedEmptyFiles = 0;
 
+  const brandsByShop = new Map<string, string>();
+  for (const dataset of datasets) {
+    for (const product of dataset.products.values()) {
+      const { shop, brand } = deriveEcommerceClassification(product);
+      if (shop && brand && !brandsByShop.has(shop)) brandsByShop.set(shop, brand);
+    }
+  }
+
   for (const dataset of datasets) {
     for (const itemId of selectedItemIds) {
       const product = dataset.products.get(itemId);
       if (!product) continue;
       const current = products.get(itemId);
+      const classification: EcommerceClassification = deriveEcommerceClassification(product);
+      const brand = classification.brand ?? (classification.shop ? brandsByShop.get(classification.shop) : undefined);
+      const { category } = classification;
       if (!current || Date.parse(product.collected_at) > Date.parse(current.latestCollectedAt)) {
         products.set(itemId, {
           platform: PLATFORM,
@@ -150,7 +163,12 @@ export async function buildImportPlan(
           sourceUrl: product.source_url,
           title: product.title,
           latestCollectedAt: product.collected_at,
+          brand: brand ?? current?.brand,
+          category: category ?? current?.category,
         });
+      } else {
+        current.brand ??= brand;
+        current.category ??= category;
       }
       const id = observationId(dataset.name, itemId, product.collected_at);
       const observation: EcommerceObservationInput = {
@@ -166,7 +184,10 @@ export async function buildImportPlan(
 
       for (const [position, image] of product.images.entries()) {
         if (image.status !== "downloaded" && image.status !== "duplicate") {
-          throw new Error(`${dataset.name}/${itemId} image ${position} has status ${image.status}`);
+          console.warn(
+            `${dataset.name}/${itemId} image ${position} skipped because status is ${image.status}`,
+          );
+          continue;
         }
         if (image.error) throw new Error(`${dataset.name}/${itemId} image ${position} still has an error`);
         assertSha256(image.sha256);

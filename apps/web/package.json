@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p ${WEB_PORT:-3000}",
+    "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p ${WEB_PORT:-3000}",
+    "start": "next start -p 3000",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "lucide-react": "^0.468.0",
     "next": "^15.5.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

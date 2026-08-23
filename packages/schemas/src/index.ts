@@ -1,5 +1,54 @@
 export type CollectionStatus = "pending" | "collecting" | "collected" | "failed";
 
+const ECOMMERCE_CATEGORY_RULES: Array<[RegExp, string]> = [
+  [/素颜霜/, "素颜霜"],
+  [/气垫/, "气垫"],
+  [/(?:散粉|蜜粉)/, "散粉"],
+  [/粉底液/, "粉底液"],
+  [/隔离/, "隔离霜"],
+  [/遮瑕/, "遮瑕"],
+  [/(?:口红|唇釉)/, "唇妆"],
+  [/眼影/, "眼影"],
+  [/睫毛膏/, "睫毛膏"],
+];
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nonEmptyText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export interface EcommerceClassification {
+  brand?: string;
+  category?: string;
+  shop?: string;
+}
+
+export function deriveEcommerceClassification(product: Record<string, unknown>): EcommerceClassification {
+  const attributes = objectValue(product.attributes);
+  const shop = objectValue(product.shop);
+  const title = nonEmptyText(product.title) ?? "";
+  const explicitCategory = nonEmptyText(
+    product.category,
+    attributes["商品分类"],
+    attributes["叶子类目"],
+    attributes["分类"],
+    attributes["遮瑕分类"],
+  );
+  return {
+    brand: nonEmptyText(product.brand, attributes["品牌"]),
+    category: explicitCategory ?? ECOMMERCE_CATEGORY_RULES.find(([pattern]) => pattern.test(title))?.[1],
+    shop: nonEmptyText(shop.name, shop.seller_nick),
+  };
+}
+
 export interface CollectedFile {
   source: "internal" | "ecommerce";
   category: string;
@@ -17,6 +66,8 @@ export interface EcommerceProductInput {
   sourceUrl: string;
   title: string;
   latestCollectedAt: string;
+  brand?: string;
+  category?: string;
 }
 
 export interface EcommerceObservationInput {

@@ -42,8 +42,9 @@ try {
   await controlPage.waitForSelector("#status-code");
 
   assert.equal(await controlPage.locator("#status-code").textContent(), "idle");
-  assert.equal(await controlPage.locator("input").count(), 5);
+  assert.equal(await controlPage.locator("input").count(), 6);
   assert.equal(await controlPage.locator("button").count(), 6);
+  assert.equal(await controlPage.locator("#low-frequency").isChecked(), true);
   const unlabeledInputs = await controlPage.locator("input").evaluateAll((inputs) => (
     inputs.filter((input) => !input.closest("label") && !input.getAttribute("aria-label")).length
   ));

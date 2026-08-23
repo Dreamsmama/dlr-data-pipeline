@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { createDatabasePool, importEcommerceBatch, requireDatabaseUrl, runMigrations } from "@dlr/database";
+import {
+  createDatabasePool,
+  getEcommerceProduct,
+  importEcommerceBatch,
+  listEcommerceProducts,
+  requireDatabaseUrl,
+  runMigrations,
+} from "@dlr/database";
 import { loadDataset } from "../src/platforms/tmall/catalog.js";
 import { buildImportPlan } from "../src/platforms/tmall/plan.js";
 
@@ -38,6 +45,22 @@ async function main(): Promise<void> {
       const result = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${table}`);
       assert.equal(Number(result.rows[0]?.count), count, table);
     }
+    const catalog = await listEcommerceProducts(pool, {
+      search: "",
+      review: "all",
+      brand: "all",
+      category: "all",
+      limit: 20,
+      offset: 0,
+    });
+    assert.deepEqual(new Set(catalog.brands), new Set(["蒂洛薇"]));
+    assert.deepEqual(new Set(catalog.categories), new Set(["散粉", "气垫", "素颜霜"]));
+    assert.equal(catalog.items.every((item) => item.brand === "蒂洛薇"), true);
+
+    const detailedProduct = await getEcommerceProduct(pool, "1000395107293");
+    assert.ok(detailedProduct);
+    assert.equal(Object.keys(detailedProduct.payload.attributes as Record<string, unknown>).length, 14);
+    assert.equal(detailedProduct.images.filter((image) => image.imageType === "detail").length, 45);
     console.log(JSON.stringify({ databaseSmoke: "ok", ...expected }, null, 2));
   } finally {
     await pool.end();

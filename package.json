@@ -12,6 +12,7 @@
     "collect:ecommerce:python": "pnpm --filter @dlr/ecommerce-collector collect:python",
     "extension:ecommerce:start": "pnpm --filter @dlr/ecommerce-collector extension:start",
     "extension:ecommerce:run": "pnpm --filter @dlr/ecommerce-collector extension:run",
+    "collect:ecommerce:one-click": "node scripts/one-click-ecommerce.mjs",
     "import:ecommerce": "pnpm --filter @dlr/ecommerce-collector import:data",
     "test:ecommerce-collectors": "pnpm --filter @dlr/ecommerce-collector test:collectors",
     "build": "pnpm -r build",

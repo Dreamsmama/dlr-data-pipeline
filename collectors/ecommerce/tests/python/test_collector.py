@@ -69,6 +69,51 @@ class CollectorParsingTests(unittest.TestCase):
         self.assertEqual(item["url"], "https://detail.tmall.com/item.htm?id=123")
         self.assertEqual(item["navigation_url"], full_url)
 
+    def test_requested_item_selection_keeps_listing_context(self) -> None:
+        target_url = "https://detail.tmall.com/item.htm?id=844862758814&rn=public-listing&mi_id=public-token"
+        discovered = {}
+        collector.add_discovered_items(
+            discovered,
+            [
+                {
+                    "url": "https://detail.tmall.com/item.htm?id=100",
+                    "navigation_url": "https://detail.tmall.com/item.htm?id=100&mi_id=other",
+                    "listing_text": "总销量：44",
+                },
+                {
+                    "url": "https://detail.tmall.com/item.htm?id=844862758814",
+                    "navigation_url": target_url,
+                    "listing_text": "总销量：10万+",
+                },
+            ],
+            {"844862758814"},
+            1,
+        )
+
+        self.assertEqual(list(discovered), ["844862758814"])
+        self.assertEqual(discovered["844862758814"]["navigation_url"], target_url)
+        self.assertEqual(collector.listing_market(discovered["844862758814"]["listing_text"])["sales_observed"], 100_000)
+
+    def test_failed_collection_does_not_replace_existing_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory)
+            product_path = out_dir / "products" / "123" / "product.json"
+            collector.write_json(product_path, {"item_id": "123", "title": "existing product"})
+            connection = collector.init_db(out_dir / "catalog.sqlite3")
+
+            collector.save_failed_product(
+                connection,
+                out_dir,
+                "123",
+                "https://detail.tmall.com/item.htm?id=123",
+                "2026-08-22T12:00:00+00:00",
+                {"error": "platform_verification_header", "html": "blocked"},
+            )
+            connection.close()
+
+            self.assertEqual(json.loads(product_path.read_text(encoding="utf-8"))["title"], "existing product")
+            self.assertEqual(len(list(product_path.parent.glob("failure-*.json"))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,11 +23,16 @@ python -m pip install -r collectors/ecommerce/requirements.txt
 python -m playwright install chromium
 pnpm collect:ecommerce:python -- \
   --shop-url "https://example.tmall.com/category.htm" \
+  --item-id 844862758814 \
   --headed \
   --max-pages 3 \
-  --max-products 200 \
-  --max-images 150
+  --max-products 1 \
+  --max-images 80
 ```
+
+小批量完整性测试应从店铺列表页开始，并通过可重复的 `--item-id` 只选择目标商品。这样会保留列表页生成的
+导航参数和公开销量；不要把列表链接改写成只含 `id` 的直链。`--max-images` 是主图、SKU 图和详情图的总上限，
+验证完整详情时不应设置成仅够主图与 SKU 图的较小值。
 
 ### 方式二：Chrome 扩展采集
 
@@ -49,6 +54,51 @@ pnpm --filter @dlr/ecommerce-collector extension:import -- \
   data/extension/latest.json \
   --out data/extension/catalog
 ```
+
+### 一键采集（Playwright + Chrome 扩展）
+
+Windows 用户可以从项目根目录执行一个入口命令，自动启动带扩展的专用 Chrome、连接 CDP、驱动扩展完成采集，并把导出结果转换为标准目录：
+
+```powershell
+pnpm collect:ecommerce:one-click -- -ShopUrl "https://example.tmall.com/category.htm" -MaxPages 1 -MaxProducts 20 -ManualWait
+```
+
+脚本默认将 JSON 写入 `collectors/ecommerce/data/extension/latest.json`，标准目录写入
+`collectors/ecommerce/data/extension/catalog`。遇到登录或安全验证时，按提示在打开的 Chrome 中处理后按 Enter 继续；也可以先不加
+`-ManualWait`，脚本会以退出码 3 停止，再用 `-Resume -ManualWait` 继续：
+
+```powershell
+pnpm collect:ecommerce:one-click -- -Resume -ManualWait
+```
+
+只采集并保留扩展 JSON、不执行导入时，增加 `-SkipImport`；导入时不下载图片可增加 `-SkipImages`。首次使用前请确认 Node.js 22+、pnpm 11+、Python 3.10+ 和 Chrome 已安装，并已执行 `pnpm install` 与 `python -m pip install -r collectors/ecommerce/requirements.txt`。
+
+### Linux 服务器远程控制本机 Chrome
+
+如果服务器没有可用的图形桌面，推荐让本机 Chrome 保留登录态，Linux 服务器只负责运行 Playwright、保存结果和执行导入。两端使用 SSH 反向隧道连接 CDP，CDP 端口只绑定在 SSH 本地回环地址，不要开放到公网。
+
+本机先启动带扩展的 Chrome：
+
+```powershell
+pnpm extension:ecommerce:start -- --port 9333
+```
+
+再在本机保持 SSH 隧道：
+
+```powershell
+ssh -N -T -R 19333:127.0.0.1:9333 user@your-server
+```
+
+Linux 服务器上执行一键采集。服务器脚本发现 `127.0.0.1:9333` 已经是转发过来的 CDP 后，会连接本机 Chrome，不会再启动第二个浏览器：
+
+```bash
+pnpm collect:ecommerce:one-click -- \
+  --shop-url "https://example.tmall.com/category.htm" \
+  --port 19333 \
+  --manual-wait
+```
+
+遇到登录或安全验证时，在本机 Chrome 中处理，服务器终端按 Enter 继续。服务器需要 Node.js 22+、pnpm 11+、Python 3.10+ 和项目依赖；本机 Chrome 与服务器的 SSH 会话必须在整个采集过程中保持连接。
 
 生成的数据、浏览器 profile、SQLite 和测试截图均被 `.gitignore` 排除，不得提交 Cookie、账号信息或真实密钥。
 

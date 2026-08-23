@@ -1,10 +1,12 @@
 node_modules/
 .pnpm-store/
 .next/
+.next-dev/
 dist/
 .env
 .env.local
 *.log
+.dev-services/
 .DS_Store
 coverage/
 __pycache__/
