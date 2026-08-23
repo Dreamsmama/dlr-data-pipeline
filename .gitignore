@@ -7,3 +7,11 @@ dist/
 *.log
 .DS_Store
 coverage/
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-*
+collectors/ecommerce/.chrome-extension-profile/
+collectors/ecommerce/.import-work/
+collectors/ecommerce/data/
+collectors/ecommerce/output/
