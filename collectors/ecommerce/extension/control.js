@@ -3,6 +3,15 @@ import { extractPageInTab } from "./extractor.js";
 const STATE_KEY = "collectorStateV1";
 const RAW_PAGE_PREFIX = "rawPage:";
 const CONTROL_URL = chrome.runtime.getURL("control.html");
+const LOW_FREQUENCY_DEFAULTS = {
+  product_gap_min_ms: 8000,
+  product_gap_max_ms: 16000,
+  cooldown_every: 4,
+  cooldown_min_ms: 45000,
+  cooldown_max_ms: 90000,
+  list_gap_min_ms: 15000,
+  list_gap_max_ms: 30000
+};
 const STATUS_LABELS = {
   idle: "空闲",
   running: "采集中",
@@ -21,6 +30,7 @@ const elements = {
   maxProducts: document.querySelector("#max-products"),
   maxImages: document.querySelector("#max-images"),
   waitMs: document.querySelector("#wait-ms"),
+  lowFrequency: document.querySelector("#low-frequency"),
   start: document.querySelector("#start-button"),
   stop: document.querySelector("#stop-button"),
   continue: document.querySelector("#continue-button"),
@@ -63,6 +73,7 @@ function createIdleState() {
     product_index: 0,
     products: [],
     failures: [],
+    pending_resume: null,
     work_tab_id: null,
     current_kind: null,
     current_url: null,
@@ -138,7 +149,17 @@ function readConfig() {
     max_pages: boundedInteger(elements.maxPages, 1, 20),
     max_products: boundedInteger(elements.maxProducts, 1, 200),
     max_images: boundedInteger(elements.maxImages, 1, 200),
-    wait_ms: boundedInteger(elements.waitMs, 1000, 60000)
+    wait_ms: boundedInteger(elements.waitMs, 1000, 60000),
+    low_frequency: elements.lowFrequency.checked
+  };
+}
+
+function normalizeConfig(config) {
+  if (!config) return null;
+  return {
+    ...LOW_FREQUENCY_DEFAULTS,
+    ...config,
+    low_frequency: config.low_frequency !== false
   };
 }
 
@@ -150,7 +171,9 @@ async function loadState() {
   const stored = await chrome.storage.local.get(STATE_KEY);
   const value = stored[STATE_KEY];
   if (!value || value.schema_version !== 1) return createIdleState();
-  return { ...createIdleState(), ...value };
+  const loaded = { ...createIdleState(), ...value };
+  loaded.config = normalizeConfig(loaded.config);
+  return loaded;
 }
 
 function addLog(message) {
@@ -172,6 +195,7 @@ function setFormFromState() {
   elements.maxProducts.value = state.config.max_products;
   elements.maxImages.value = state.config.max_images;
   elements.waitMs.value = state.config.wait_ms;
+  elements.lowFrequency.checked = state.config.low_frequency !== false;
 }
 
 function renderResults() {
@@ -301,6 +325,32 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function randomDelay(minimum, maximum) {
+  return minimum + Math.floor(Math.random() * (maximum - minimum + 1));
+}
+
+async function applyLowFrequencyDelay(kind, completedProducts = 0) {
+  if (!state.config?.low_frequency) return;
+  let minimum;
+  let maximum;
+  let message;
+  if (kind === "list") {
+    if (state.list_page_index === 0) return;
+    minimum = LOW_FREQUENCY_DEFAULTS.list_gap_min_ms;
+    maximum = LOW_FREQUENCY_DEFAULTS.list_gap_max_ms;
+    message = "列表翻页低频等待";
+  } else {
+    if (completedProducts === 0) return;
+    const coolingDown = completedProducts % LOW_FREQUENCY_DEFAULTS.cooldown_every === 0;
+    minimum = coolingDown ? LOW_FREQUENCY_DEFAULTS.cooldown_min_ms : LOW_FREQUENCY_DEFAULTS.product_gap_min_ms;
+    maximum = coolingDown ? LOW_FREQUENCY_DEFAULTS.cooldown_max_ms : LOW_FREQUENCY_DEFAULTS.product_gap_max_ms;
+    message = coolingDown ? "连续商品采集完成，进入低频冷却" : "商品切换低频等待";
+  }
+  const delay = randomDelay(minimum, maximum);
+  await checkpoint(`${message} ${Math.ceil(delay / 1000)} 秒`);
+  await wait(delay);
+}
+
 async function loadAndExtract(url, mode, reuseLoadedPage = false) {
   if (!isAllowedPageUrl(url)) throw new Error(`unsupported_page_url: ${url}`);
   state.current_kind = mode;
@@ -316,12 +366,16 @@ async function loadAndExtract(url, mode, reuseLoadedPage = false) {
   }
   const result = await executeExtraction(mode);
   if (result.error === "login_required" || result.error === "platform_verification_page") {
+    // Keep the original target. The verification page is not a product/list page,
+    // so extracting it after login would repeat the same prompt or lose the item.
+    state.pending_resume = { url, mode };
     state.status = "needs_user";
     state.current_url = result.fetched_url || url;
     await checkpoint(result.error === "login_required" ? "采集页需要登录" : "采集页需要安全验证");
     return null;
   }
   if (result.error) throw new Error(result.error);
+  state.pending_resume = null;
   return result;
 }
 
@@ -363,6 +417,7 @@ async function runListingStep(reuseLoadedPage) {
     await checkpoint(`列表读取完成，发现 ${state.product_queue.length} 个商品`);
     return true;
   }
+  await applyLowFrequencyDelay("list");
   const result = await loadAndExtract(state.current_list_url, "list", reuseLoadedPage);
   if (!result) return false;
   state.visited_list_urls.push(result.fetched_url || state.current_list_url);
@@ -455,6 +510,7 @@ async function runProductStep(reuseLoadedPage) {
   }
   const item = state.product_queue[state.product_index];
   try {
+    await applyLowFrequencyDelay("product", state.product_index);
     const result = await loadAndExtract(item.navigation_url || item.url, "product", reuseLoadedPage);
     if (!result) return false;
     await recordProduct(item, result);
@@ -532,10 +588,16 @@ async function stopRun() {
 
 async function continueRun() {
   if (!["needs_user", "paused"].includes(state.status)) return;
-  const reuseLoadedPage = state.status === "needs_user";
+  const pendingResume = state.pending_resume;
   state.status = "running";
-  await checkpoint(reuseLoadedPage ? "继续读取验证后的页面" : "继续采集任务");
-  void runLoop({ reuseLoadedPage });
+  await checkpoint(
+    pendingResume
+      ? `验证完成，重新打开${pendingResume.mode === "list" ? "列表页" : "商品页"}`
+      : "继续采集任务"
+  );
+  // Always navigate back to the original target after manual handling. Reusing
+  // the login/challenge document can execute extraction against the wrong page.
+  void runLoop({ reuseLoadedPage: false });
 }
 
 async function focusWorkTab() {

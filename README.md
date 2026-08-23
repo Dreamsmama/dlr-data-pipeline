@@ -22,6 +22,8 @@ pnpm install
 pnpm dev
 ```
 
+Windows 下可以直接双击项目根目录的 `start-dev.cmd` 在后台启动 Web 和 API，关闭启动窗口不会停止服务；每次启动的日志写入 `logs` 目录。使用 `status-dev.cmd` 检查状态，使用 `stop-dev.cmd` 停止服务。
+
 - Web: http://localhost:3000
 - API 健康检查: http://localhost:3001/health
 

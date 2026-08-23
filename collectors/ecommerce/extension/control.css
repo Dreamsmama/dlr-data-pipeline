@@ -153,6 +153,23 @@ body[data-status="failed"] .status-badge {
   gap: 16px;
 }
 
+.toggle-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: #505960;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toggle-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #1f6f50;
+}
+
 .primary-actions,
 .secondary-actions {
   display: flex;

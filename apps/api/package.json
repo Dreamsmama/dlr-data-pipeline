@@ -10,6 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@dlr/database": "workspace:*",
+    "@fastify/cors": "^11.1.0",
     "fastify": "^5.5.0"
   },
   "devDependencies": {
