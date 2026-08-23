@@ -1,0 +1,8 @@
+[project]
+name = "dlr-feishu-bridge"
+version = "0.1.0"
+description = "DLR 飞书历史消息采集桥接任务"
+requires-python = ">=3.12"
+
+[tool.uv]
+package = false

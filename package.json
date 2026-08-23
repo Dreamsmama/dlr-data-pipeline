@@ -9,8 +9,14 @@
     "dev:api": "pnpm --filter @dlr/api dev",
     "dev:internal": "pnpm --filter @dlr/internal-collector dev",
     "dev:ecommerce": "pnpm --filter @dlr/ecommerce-collector dev",
+    "db:migrate": "pnpm --filter @dlr/database migrate",
+    "db:check": "pnpm --filter @dlr/database check",
+    "storage:check": "pnpm --filter @dlr/storage check",
+    "feishu:backfill": "pnpm --filter @dlr/api feishu:backfill",
+    "feishu:mentions": "pnpm --filter @dlr/api feishu:mentions",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @dlr/api test && pnpm --filter @dlr/internal-collector test"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

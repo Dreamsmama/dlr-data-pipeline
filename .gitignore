@@ -7,3 +7,10 @@ dist/
 *.log
 .DS_Store
 coverage/
+*.tsbuildinfo
+.venv/
+__pycache__/
+*.py[cod]
+.tmp/
+runlogs/
+collectors/internal/run-data/

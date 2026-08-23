@@ -4,12 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare:deps": "pnpm --filter @dlr/database --filter @dlr/storage build",
+    "predev": "pnpm run prepare:deps",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "pretypecheck": "pnpm run prepare:deps",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm run prepare:deps",
+    "test": "tsx --test src/app.test.ts src/feishu/attachment-worker.test.ts src/feishu/lark-cli-bridge.test.ts src/feishu/mention-resolution.test.ts",
+    "prefeishu:backfill": "pnpm run prepare:deps",
+    "feishu:backfill": "tsx src/feishu/backfill-cli.ts",
+    "prefeishu:mentions": "pnpm run prepare:deps",
+    "feishu:mentions": "tsx src/feishu/mention-mget-backfill-cli.ts"
   },
   "dependencies": {
+    "@dlr/database": "workspace:*",
+    "@dlr/storage": "workspace:*",
     "fastify": "^5.5.0"
   },
   "devDependencies": {
