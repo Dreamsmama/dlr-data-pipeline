@@ -43,3 +43,7 @@ pnpm dev:ecommerce
 - 开发完成后向 `develop` 提交 PR；`main` 仅保留稳定版本。
 
 更多约定见 `docs/architecture.md` 和 `docs/development.md`。
+
+## 服务器部署
+
+阿里云服务器的一键部署入口为 `deploy.sh`。生产配置、端口约定、首次部署与回退说明见 [`deploy/DEPLOY_HANDOFF.md`](deploy/DEPLOY_HANDOFF.md)。

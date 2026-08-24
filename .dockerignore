@@ -1,0 +1,15 @@
+.git
+.env
+.dev-services
+.next
+.next-dev
+.pnpm-store
+node_modules
+logs
+output
+collectors/ecommerce/.chrome-extension-profile
+collectors/ecommerce/.import-work
+collectors/ecommerce/data
+collectors/ecommerce/output
+**/__pycache__
+**/*.pyc

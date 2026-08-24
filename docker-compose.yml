@@ -1,0 +1,51 @@
+services:
+  api:
+    image: dlr-data-pipeline-api:${DEPLOY_IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: api
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      API_PORT: "3001"
+      ECOMMERCE_IMPORT_ALLOWED_ROOT: /data
+      ECOMMERCE_FULL_DATA_DIR: /data/data-diluowei-full
+      ECOMMERCE_EXTENSION_DATA_DIR: /data/data-extension/catalog
+    restart: unless-stopped
+    volumes:
+      - ${APP_DATA_DIR:-./data}:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  web:
+    image: dlr-data-pipeline-web:${DEPLOY_IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: web
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      API_INTERNAL_URL: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_BIND_ADDRESS:-127.0.0.1}:${PUBLIC_PORT:-3002}:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  migrate:
+    image: dlr-data-pipeline-api:${DEPLOY_IMAGE_TAG:-latest}
+    profiles: ["tools"]
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    command: ["pnpm", "migrate"]
