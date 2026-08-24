@@ -61,6 +61,8 @@ async function main(): Promise<void> {
     assert.ok(detailedProduct);
     assert.equal(Object.keys(detailedProduct.payload.attributes as Record<string, unknown>).length, 14);
     assert.equal(detailedProduct.images.filter((image) => image.imageType === "detail").length, 45);
+    assert.equal(new Set(detailedProduct.images.map((image) => image.sourceUrl)).size, detailedProduct.images.length);
+    assert.equal(detailedProduct.imageCount, detailedProduct.images.length);
     console.log(JSON.stringify({ databaseSmoke: "ok", ...expected }, null, 2));
   } finally {
     await pool.end();

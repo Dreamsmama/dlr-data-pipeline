@@ -450,9 +450,10 @@ export async function listEcommerceProducts(
       LIMIT 1
     ) preview ON true
     LEFT JOIN LATERAL (
-      SELECT COUNT(*) AS image_count, BOOL_OR(pa.needs_review) AS needs_review
-      FROM ecommerce_product_assets pa
-      WHERE pa.platform = p.platform AND pa.item_id = p.item_id
+      SELECT COUNT(DISTINCT io.source_url) AS image_count, BOOL_OR(io.needs_review) AS needs_review
+      FROM ecommerce_image_observations io
+      JOIN ecommerce_product_observations observation ON observation.observation_id = io.observation_id
+      WHERE observation.platform = p.platform AND observation.item_id = p.item_id
     ) asset_stats ON true
     WHERE ($1 = '' OR p.title ILIKE '%' || $1 || '%' OR p.item_id ILIKE '%' || $1 || '%'
       OR COALESCE(p.brand, '') ILIKE '%' || $1 || '%' OR COALESCE(p.category, '') ILIKE '%' || $1 || '%')
@@ -543,9 +544,10 @@ export async function getEcommerceProduct(
       LIMIT 1
     ) preview ON true
     LEFT JOIN LATERAL (
-      SELECT COUNT(*) AS image_count, BOOL_OR(pa.needs_review) AS needs_review
-      FROM ecommerce_product_assets pa
-      WHERE pa.platform = p.platform AND pa.item_id = p.item_id
+      SELECT COUNT(DISTINCT io.source_url) AS image_count, BOOL_OR(io.needs_review) AS needs_review
+      FROM ecommerce_image_observations io
+      JOIN ecommerce_product_observations observation ON observation.observation_id = io.observation_id
+      WHERE observation.platform = p.platform AND observation.item_id = p.item_id
     ) asset_stats ON true
     WHERE p.item_id = $1
     LIMIT 1`,
@@ -574,7 +576,7 @@ export async function getEcommerceProduct(
         image.height,
         image."needsReview"
       FROM (
-        SELECT DISTINCT ON (io.asset_sha256)
+        SELECT DISTINCT ON (io.source_url)
           io.asset_sha256 AS sha256,
           a.object_key AS "objectKey",
           io.source_url AS "sourceUrl",
@@ -591,8 +593,7 @@ export async function getEcommerceProduct(
         JOIN ecommerce_product_observations observation ON observation.observation_id = io.observation_id
         JOIN ecommerce_assets a ON a.sha256 = io.asset_sha256
         WHERE observation.platform = $1 AND observation.item_id = $2
-        ORDER BY io.asset_sha256,
-          CASE io.image_type WHEN 'main' THEN 0 WHEN 'sku' THEN 1 WHEN 'detail' THEN 2 ELSE 3 END,
+        ORDER BY io.source_url,
           observation.collected_at DESC,
           io.position
       ) AS image
