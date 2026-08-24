@@ -1,6 +1,6 @@
 import { loadEnvFile } from "node:process";
 import { resolve } from "node:path";
-import { createDatabasePool, runMigrations } from "@dlr/database";
+import { createDatabasePool, runMigrations } from "../packages/database/dist/index.js";
 
 try {
   loadEnvFile(resolve(import.meta.dirname, "../.env"));
