@@ -2,6 +2,7 @@ FROM node:22-bookworm-slim AS base
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 
 RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
 WORKDIR /app
@@ -17,7 +18,8 @@ COPY packages/common/package.json packages/common/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
 COPY packages/storage/package.json packages/storage/package.json
-RUN pnpm install --frozen-lockfile
+RUN pnpm config set registry https://registry.npmmirror.com \
+    && pnpm install --frozen-lockfile
 
 FROM dependencies AS build
 
