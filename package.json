@@ -16,6 +16,7 @@
     "import:ecommerce": "pnpm --filter @dlr/ecommerce-collector import:data",
     "test:ecommerce-collectors": "pnpm --filter @dlr/ecommerce-collector test:collectors",
     "migrate": "node scripts/migrate.mjs",
+    "deploy:wuyang": "node scripts/deploy-to-wuyang.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck"
   },
