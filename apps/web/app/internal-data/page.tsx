@@ -8,8 +8,8 @@ import {
   type FeishuTimelineAttachment,
   type FeishuTimelineMessage,
 } from "../components/FeishuTimeline";
+import { API_BASE } from "../api-base";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 const PAGE_SIZE = 20;
 type ChatCategory = "group" | "p2p";
 

@@ -8,8 +8,8 @@ import {
   type FeishuTimelineAttachment as Attachment,
   type FeishuTimelineMessage as Message,
 } from "../../components/FeishuTimeline";
+import { API_BASE } from "../../api-base";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 const CLI_APP_ID_STORAGE_KEY = "dlr.feishu.cli.app-id.v1";
 
 type CollectorMode = "robot" | "cli";
