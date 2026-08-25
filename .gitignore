@@ -17,3 +17,8 @@ collectors/ecommerce/.chrome-extension-profile/
 collectors/ecommerce/.import-work/
 collectors/ecommerce/data/
 collectors/ecommerce/output/
+*.tsbuildinfo
+.venv/
+.tmp/
+runlogs/
+collectors/internal/run-data/

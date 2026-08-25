@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { loadEnvFile } from "node:process";
-import cors from "@fastify/cors";
-import Fastify from "fastify";
+import path, { isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   createDatabasePool,
   getEcommerceProduct,
@@ -12,19 +11,24 @@ import {
   listEcommerceFiles,
   listEcommerceImports,
   listEcommerceProducts,
+  PostgresFeishuRepository,
+  requireDatabaseUrl,
   type DatabasePool,
 } from "@dlr/database";
+import { AliyunOssStorage, requireOssConfig } from "@dlr/storage";
 
-const repositoryRoot = resolve(import.meta.dirname, "../../..");
+import { buildApp } from "./app.js";
+import { FeishuExternalPersistence } from "./feishu/external-persistence.js";
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(currentDir, "../../..");
 try {
-  loadEnvFile(resolve(repositoryRoot, ".env"));
+  process.loadEnvFile(path.join(repositoryRoot, ".env"));
 } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
-
-const app = Fastify({ logger: true });
 const port = Number(process.env.API_PORT ?? 3001);
-const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const host = process.env.API_HOST ?? "0.0.0.0";
 const allowedImportRoot = resolve(process.env.ECOMMERCE_IMPORT_ALLOWED_ROOT ?? resolve(repositoryRoot, ".."));
 let pool: DatabasePool | undefined;
 
@@ -159,18 +163,52 @@ function startImport(options: {
   return job;
 }
 
-await app.register(cors, { origin: webOrigin });
-
-app.get("/health", async () => ({ status: "ok", service: "dlr-api" }));
-
-app.get("/api/summary", async (_request, reply) => {
-  try {
-    return { configured: true, ...(await getEcommerceSummary(database())) };
-  } catch (error) {
-    reply.code(503);
-    return { configured: false, products: 0, assets: 0, rawFiles: 0, imports: 0, needsReview: 0, error: safeMessage(error) };
-  }
+const dataRoot = process.env.FEISHU_DATA_DIR
+  ? path.resolve(process.env.FEISHU_DATA_DIR)
+  : path.join(repositoryRoot, "collectors/internal/run-data/feishu");
+const pythonProject = path.join(repositoryRoot, "collectors/internal/python");
+const allowedOrigins = (process.env.ALLOWED_WEB_ORIGINS ?? process.env.WEB_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const persistenceMode = process.env.FEISHU_PERSISTENCE_MODE?.trim() || "local";
+if (!["local", "postgres-oss"].includes(persistenceMode)) {
+  throw new Error("FEISHU_PERSISTENCE_MODE 只能是 local 或 postgres-oss");
+}
+const persistenceRequested = persistenceMode === "postgres-oss";
+let persistence: FeishuExternalPersistence | undefined;
+if (persistenceRequested) {
+  const repository = new PostgresFeishuRepository(createDatabasePool(requireDatabaseUrl()));
+  const storage = new AliyunOssStorage(requireOssConfig());
+  persistence = new FeishuExternalPersistence(repository, storage);
+  await persistence.health();
+}
+const app = await buildApp({
+  dataRoot,
+  pythonProject,
+  pythonScript: path.join(pythonProject, "feishu_bridge.py"),
+  allowedOrigins,
+  logger: true,
+  persistence,
+  history: persistence,
+  persistenceMode: persistence ? "postgres-oss" : "local",
+  ecommerceSummary: async () => {
+    try {
+      return { configured: true, ...(await getEcommerceSummary(database())) };
+    } catch (error) {
+      return {
+        configured: false,
+        products: 0,
+        assets: 0,
+        rawFiles: 0,
+        imports: 0,
+        needsReview: 0,
+        error: safeMessage(error),
+      };
+    }
+  },
 });
+
 
 app.get<{ Querystring: { q?: string; review?: string; brand?: string; category?: string; page?: string; pageSize?: string } }>(
   "/api/ecommerce/products",
@@ -324,4 +362,4 @@ app.addHook("onClose", async () => {
   await pool?.end();
 });
 
-await app.listen({ port, host: "0.0.0.0" });
+await app.listen({ port, host });
