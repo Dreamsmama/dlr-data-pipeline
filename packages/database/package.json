@@ -11,12 +11,24 @@
       "import": "./dist/index.js"
     }
   },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "scripts": {
+    "prepare:deps": "pnpm --filter @dlr/schemas build",
+    "prebuild": "pnpm run prepare:deps",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm run prepare:deps",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "pnpm build && node dist/migrate.js",
+    "check": "pnpm build && node dist/check.js"
+  },
   "dependencies": {
     "@dlr/schemas": "workspace:*",
-    "pg": "^8.16.3"
+    "pg": "^8.23.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.15.5"
-  }
+    "@types/pg": "^8.23.1"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ]
 }

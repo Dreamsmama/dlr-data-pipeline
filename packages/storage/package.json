@@ -13,12 +13,16 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm build && node dist/check.js"
   },
   "dependencies": {
     "ali-oss": "^6.23.0"
   },
   "devDependencies": {
     "@types/ali-oss": "^6.23.3"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

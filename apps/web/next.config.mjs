@@ -1,3 +1,9 @@
+const internalApiBase = (
+  process.env.API_INTERNAL_URL
+  ?? process.env.INTERNAL_API_BASE_URL
+  ?? "http://127.0.0.1:3001"
+).replace(/\/+$/, "");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
@@ -5,7 +11,7 @@ const nextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: `${process.env.API_INTERNAL_URL ?? "http://127.0.0.1:3001"}/api/:path*`,
+        destination: `${internalApiBase}/api/:path*`,
       },
     ];
   },

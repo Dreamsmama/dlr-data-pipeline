@@ -4,7 +4,7 @@ import "./styles.css";
 
 export const metadata = {
   title: { default: "DLR 数据采集后台", template: "%s | DLR" },
-  description: "DLR 电商数据采集与资产管理后台",
+  description: "DLR 电商与内部数据采集、资产管理后台",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
