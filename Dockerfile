@@ -1,10 +1,34 @@
+FROM python:3.12.13-slim-bookworm AS python-runtime
+
+ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+RUN python -m pip install --no-cache-dir --index-url "$PYPI_INDEX_URL" uv==0.11.7 \
+    && python --version \
+    && uv --version
+
 FROM node:22-bookworm-slim AS base
 
 ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
+ENV PATH=$PNPM_HOME:$PNPM_HOME/bin:$PATH
 ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONUTF8=1
+ENV LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1
+ENV LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1
 
-RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
+COPY --from=python-runtime /usr/local /usr/local
+
+RUN corepack enable \
+    && corepack prepare pnpm@11.19.0 --activate \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && pnpm config set registry https://registry.npmmirror.com \
+    && pnpm add --global @larksuite/cli@1.0.88 \
+    && node --version \
+    && pnpm --version \
+    && python3 --version \
+    && uv --version \
+    && lark-cli --version \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 FROM base AS dependencies

@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
 services:
   api:
     image: dlr-data-pipeline-api:${DEPLOY_IMAGE_TAG:-latest}
@@ -7,11 +13,22 @@ services:
     env_file:
       - ${APP_ENV_FILE:-.env}
     environment:
+      NODE_ENV: production
       API_PORT: "3001"
       ECOMMERCE_IMPORT_ALLOWED_ROOT: /data
       ECOMMERCE_FULL_DATA_DIR: /data/data-diluowei-full
       ECOMMERCE_EXTENSION_DATA_DIR: /data/data-extension/catalog
+      FEISHU_PERSISTENCE_MODE: ${FEISHU_PERSISTENCE_MODE:-postgres-oss}
+      FEISHU_DATA_DIR: ${FEISHU_DATA_DIR:-/data/feishu}
+      HOME: ${LARK_CLI_HOME:-/data/feishu/runtime/lark-cli-home}
+      XDG_CONFIG_HOME: ${LARK_CLI_HOME:-/data/feishu/runtime/lark-cli-home}/.config
     restart: unless-stopped
+    init: true
+    cpus: ${API_CPU_LIMIT:-1.0}
+    mem_limit: ${API_MEMORY_LIMIT:-768m}
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
     volumes:
       - ${APP_DATA_DIR:-./data}:/data
     healthcheck:
@@ -29,6 +46,7 @@ services:
     env_file:
       - ${APP_ENV_FILE:-.env}
     environment:
+      NODE_ENV: production
       API_INTERNAL_URL: http://api:3001
     depends_on:
       api:
@@ -36,6 +54,12 @@ services:
     ports:
       - "${PUBLIC_BIND_ADDRESS:-127.0.0.1}:${PUBLIC_PORT:-3002}:3000"
     restart: unless-stopped
+    init: true
+    cpus: ${WEB_CPU_LIMIT:-0.75}
+    mem_limit: ${WEB_MEMORY_LIMIT:-512m}
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -48,4 +72,28 @@ services:
     profiles: ["tools"]
     env_file:
       - ${APP_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
     command: ["pnpm", "migrate"]
+    cpus: ${MIGRATE_CPU_LIMIT:-1.0}
+    mem_limit: ${MIGRATE_MEMORY_LIMIT:-1g}
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  db-backup:
+    image: ${POSTGRES_TOOLS_IMAGE:-postgres:17-alpine}
+    profiles: ["tools"]
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    command:
+      - sh
+      - -ec
+      - pg_dump --no-password --format=custom --file="/backups/$${BACKUP_FILE}" "$${DATABASE_URL}" && pg_restore --list "/backups/$${BACKUP_FILE}" >/dev/null
+    volumes:
+      - ${APP_BACKUP_DIR:-./backups}:/backups
+    cpus: ${BACKUP_CPU_LIMIT:-0.75}
+    mem_limit: ${BACKUP_MEMORY_LIMIT:-512m}
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging

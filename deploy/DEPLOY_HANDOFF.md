@@ -1,94 +1,104 @@
-# DLR Data Pipeline 部署交接
+# DLR Data Pipeline 生产部署交接
 
 ## 部署约定
 
-- 服务器：`121.199.52.72`
+- 服务器 SSH 别名：`wuyang`
 - 固定部署入口：`/opt/dlr-data-pipeline/deploy.sh`
-- 代码目录：`/opt/dlr-data-pipeline/repository`
+- 不可变发布目录：`/opt/dlr-data-pipeline/releases/<完整Git提交ID>`
 - 持久配置：`/opt/dlr-data-pipeline/shared/.env`
-- 导入数据目录：`/opt/dlr-data-pipeline/shared/data`
+- 持久数据：`/opt/dlr-data-pipeline/shared/data`
+- 数据库备份：`/opt/dlr-data-pipeline/shared/backups`
 - 部署日志：`/opt/dlr-data-pipeline/shared/logs`
-- 默认服务器本机地址：`http://127.0.0.1:3002`
+- 默认监听：`127.0.0.1:3002`
 
-服务器的 80 端口已有其他项目使用，本项目默认使用 3002。当前管理后台没有登录鉴权，所以默认只绑定 `127.0.0.1`，不能直接从公网访问。正式开放时应优先通过带访问控制的 Nginx 或 VPN 代理；确认接受无鉴权公网暴露风险后，才可把 `.env` 中的 `PUBLIC_BIND_ADDRESS` 改成 `0.0.0.0`，并同步调整 `WEB_ORIGIN` 和阿里云安全组。
+服务器的 80 端口已有其他项目使用。本项目使用独立 Compose project 和 3002，不允许执行全局 Docker 清理。当前管理后台没有登录鉴权；绑定 `0.0.0.0` 前必须在生产配置中显式接受风险，正式运行应增加 HTTPS 和访问控制。
 
-部署只启动 Web 和 API。淘宝/天猫采集依赖本机 Chrome 登录态，应在采集电脑执行；采集完成的数据可放入服务器共享数据目录，再从管理后台触发导入。
+API 镜像包含 Node、pnpm、Python、uv 和飞书 CLI。飞书 CLI 在 Linux 容器中的认证持久化仍需真实扫码、容器重建和 Token 刷新专项验收。淘宝/天猫浏览器采集继续在拥有平台登录态的采集电脑运行，浏览器离线不会阻断普通代码发布。
 
-## 首次部署
+完整架构、安全边界和验收标准见 `docs/production-one-click-deployment-design.md`。
 
-### 推荐：本地推送制品
+## 部署前独立体检
 
-服务器不应把跨境 GitHub 链路作为发布前置条件。在本地确认并提交代码后执行：
-
-```bash
-pnpm deploy:wuyang
-```
-
-该命令使用 `git archive` 打包当前提交，通过已有 SSH 配置上传到服务器，再触发构建和切换。服务器不会访问 GitHub，且未提交和未跟踪文件不会进入制品；工作区不干净时命令会直接拒绝发布。
-
-### 备用：服务器拉取 GitHub
-
-阿里云国内链路访问 GitHub 时应强制使用 HTTP/1.1，并使用浅克隆减少传输量。当前部署代码合并到 `main` 后执行：
+首次部署、服务器迁移或基础设施变更后，先执行只读体检：
 
 ```bash
-git -c http.version=HTTP/1.1 clone --depth=1 --branch main https://github.com/Dreamsmama/dlr-data-pipeline.git /opt/dlr-data-pipeline/repository
-bash /opt/dlr-data-pipeline/repository/deploy.sh
+pnpm deploy:production -- preflight
 ```
 
-如果尚未合并，需要明确指定分支：
+命令读取 `deploy/targets/wuyang.env` 中不含密钥的服务器基线，通过 SSH 标准输入临时执行 `deploy/preflight.sh`。它不会上传文件、安装软件、构建镜像、修改配置、启动或重启容器，也不会对数据库和 OSS 写入数据。
+
+体检覆盖操作系统和架构、CPU/负载、内存/交换空间、磁盘/inode、Docker/Compose、时间同步、3002 端口、其他 Compose 项目、生产配置文件以及镜像/包管理器/数据库/OSS 的网络可达性。`FAIL` 会返回非零状态并阻止继续部署；`WARN` 允许命令成功退出，但必须由发布人确认风险。
+
+如果 SSH 地址不是可作为画像名称的别名（例如直接使用 IP），需要显式指定：
 
 ```bash
-git -c http.version=HTTP/1.1 clone --depth=1 --branch feature/ecommerce-collector https://github.com/Dreamsmama/dlr-data-pipeline.git /opt/dlr-data-pipeline/repository
-DEPLOY_BRANCH=feature/ecommerce-collector bash /opt/dlr-data-pipeline/repository/deploy.sh
+pnpm deploy:production -- preflight --server 121.199.52.72 --profile wuyang
 ```
 
-首次运行会生成 `/opt/dlr-data-pipeline/shared/.env` 并停止，同时安装固定入口 `/opt/dlr-data-pipeline/deploy.sh`，并在共享目录记住本次目标分支。填写 PostgreSQL 和 OSS 配置后，直接运行固定入口即可，不要把密钥提交到 Git 或发送到群聊。
+## 首次初始化
 
-## 后续更新
+生产服务器应使用 SSH 密钥登录。本地确认代码已经人工验收、提交并位于 `main` 后执行：
 
 ```bash
-bash /opt/dlr-data-pipeline/deploy.sh
+pnpm deploy:production -- bootstrap
 ```
 
-目标分支会持久化到 `/opt/dlr-data-pipeline/shared/deploy-branch`。以后只有切换分支时才需要显式传入，例如 `DEPLOY_BRANCH=main bash /opt/dlr-data-pipeline/deploy.sh`。脚本会依次完成：
+该命令安装服务器部署依赖并生成 `/opt/dlr-data-pipeline/shared/.env`，不会启动 DLR 或修改其他项目。登录服务器填写所有 `FILL_` 项，密钥不能提交到 Git、终端历史或群聊。
 
-1. 检查服务器仓库没有未提交改动，以 HTTP/1.1 浅拉取目标分支；网络失败会自动重试三次。
-2. 按 Git 短提交 ID 构建 API 和 Web 镜像，构建期间不停止旧服务。
-3. 通过 PostgreSQL advisory lock 幂等执行 migration，已执行且内容未改变的 migration 不会重复运行。
-4. 切换容器并检查首页和 `/api/summary`，确认 API 能访问数据库。
-5. 失败时停止后续步骤；若旧容器存在，则自动恢复上一版镜像。
+公网绑定还需要：
 
-数据库 migration 必须保持向后兼容，禁止在同一次发布中直接删除旧版本仍依赖的表或列，否则应用镜像回退无法恢复数据库结构。
+```dotenv
+PUBLIC_BIND_ADDRESS=0.0.0.0
+PUBLIC_PORT=3002
+WEB_ORIGIN=http://121.199.52.72:3002
+ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS=true
+```
 
-## 验收
+最后一项只是显式风险确认，不是鉴权功能。阿里云安全组仍需单独放行端口。
+
+## 日常发布
 
 ```bash
-curl -fsS http://127.0.0.1:3002/
-curl -fsS http://127.0.0.1:3002/api/summary
-cd /opt/dlr-data-pipeline/repository
-APP_ENV_FILE=/opt/dlr-data-pipeline/shared/.env APP_DATA_DIR=/opt/dlr-data-pipeline/shared/data PUBLIC_BIND_ADDRESS=127.0.0.1 PUBLIC_PORT=3002 docker compose ps
-cat /opt/dlr-data-pipeline/shared/current-version
+pnpm deploy:production
 ```
 
-`/api/summary` 应返回 `"configured":true`。验收时记录访问地址、Git 提交 ID和容器状态，不要回显 `.env`。
+一个命令会完成：
 
-## 日志与手动回退
+1. 拒绝非 `main`、未提交或存在未跟踪文件的工作区。
+2. 在上传前执行单元测试和类型检查；服务器不可变镜像构建包含应用生产构建。
+3. 生成 Git archive 并验证 SHA-256，不依赖服务器访问 GitHub。
+4. 检查生产配置、端口、磁盘、内存和 Compose project。
+5. 构建不可变 API/Web 镜像，旧服务在构建期间继续运行。
+6. 创建并校验 PostgreSQL custom-format 全量备份。
+7. 拒绝未显式批准的破坏性 migration，再执行带 advisory lock 的幂等迁移。
+8. 切换容器，验证固定运行时、数据库、OSS、内部数据、电商数据和页面。
+9. 从部署电脑访问 `WEB_ORIGIN`，验证真实公网链路。
+10. 服务器内部验收失败时恢复切换前的代码镜像并重新健康检查。
 
-查看应用日志：
+公网验收失败不会自动回滚服务器内部健康的版本，因为安全组或公网链路失败不代表应用版本损坏；命令仍返回失败，要求人工处理入口。
+
+## 验收、状态和回滚
 
 ```bash
-cd /opt/dlr-data-pipeline/repository
-APP_ENV_FILE=/opt/dlr-data-pipeline/shared/.env APP_DATA_DIR=/opt/dlr-data-pipeline/shared/data PUBLIC_BIND_ADDRESS=127.0.0.1 PUBLIC_PORT=3002 docker compose logs --tail 200 api web
+pnpm deploy:production -- verify
+pnpm deploy:production -- status
+pnpm deploy:production -- rollback <Git提交前缀>
 ```
 
-部署失败会自动使用 `rollback-时间戳` 标签恢复旧镜像。需要手动切回已保留的标签时：
+`verify` 会执行数据库和 OSS 临时写入/清理深度检查。`rollback` 只回滚代码镜像，不自动逆转数据库结构，因此 migration 必须始终向前兼容。
+
+确实需要跳过部署电脑的公网检查时必须显式使用：
 
 ```bash
-cd /opt/dlr-data-pipeline/repository
-export APP_ENV_FILE=/opt/dlr-data-pipeline/shared/.env
-export APP_DATA_DIR=/opt/dlr-data-pipeline/shared/data
-export PUBLIC_BIND_ADDRESS=127.0.0.1
-export PUBLIC_PORT=3002
-export DEPLOY_IMAGE_TAG=rollback-YYYYMMDDHHMMSS
-docker compose up -d --no-build --force-recreate api web
+pnpm deploy:production -- verify --skip-public-verify
 ```
+
+## 直接服务器操作（故障处理）
+
+```bash
+bash /opt/dlr-data-pipeline/deploy.sh status
+bash /opt/dlr-data-pipeline/deploy.sh verify
+bash /opt/dlr-data-pipeline/deploy.sh rollback <Git提交前缀>
+```
+
+不要直接编辑 release 目录。配置和数据只允许修改 `shared`，失败时首先查看脚本输出的独立日志路径。
