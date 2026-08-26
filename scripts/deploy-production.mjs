@@ -410,7 +410,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (["bootstrap", "deploy"].includes(options.command)) {
     const source = assertProductionSource();
-    console.log(`发布来源：branch=${source.branch} commit=${source.commit}`);
+    console.log(`应急制品来源：branch=${source.branch} commit=${source.commit}`);
     if (options.command === "deploy") runLocalQualityGate(options);
     uploadRelease(options, source);
   } else {
