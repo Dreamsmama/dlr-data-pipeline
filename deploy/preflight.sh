@@ -130,7 +130,7 @@ for value in "$TARGET_MIN_CPU_CORES" "$TARGET_MIN_TOTAL_MEMORY_MB" \
   valid_positive_integer "$value" || fail "目标画像包含非法正整数"
 done
 
-required_commands=(awk bash curl df dirname find getconf grep head sed sort stat tail timeout tr uname)
+required_commands=(awk bash curl df dirname find getconf git grep head sed sort stat tail timeout tr uname)
 missing_commands=()
 for required_command in "${required_commands[@]}"; do
   command -v "$required_command" >/dev/null 2>&1 || missing_commands+=("$required_command")
@@ -297,6 +297,11 @@ else
     fail "生产配置权限为 ${env_permissions}，要求 0600；preflight 不会自动修正"
   fi
   missing_variables=()
+  placeholder_variables=()
+  while IFS= read -r placeholder_name; do
+    [[ -n "$placeholder_name" ]] && placeholder_variables+=("$placeholder_name")
+  done < <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*FILL_[A-Za-z0-9_]*' "$ENV_FILE" \
+    | cut -d= -f1 | sed 's/^[[:space:]]*//' | sort -u || true)
   for required_variable in DATABASE_URL ALIYUN_OSS_REGION ALIYUN_OSS_ACCESS_KEY_ID \
     ALIYUN_OSS_ACCESS_KEY_SECRET ALIYUN_OSS_BUCKET_NAME WEB_ORIGIN FEISHU_PERSISTENCE_MODE \
     PUBLIC_BIND_ADDRESS PUBLIC_PORT; do
@@ -309,6 +314,11 @@ else
     pass "生产配置必填项完整（未输出任何密钥值）"
   else
     fail "生产配置缺少或未填写：${missing_variables[*]}"
+  fi
+  if (( ${#placeholder_variables[@]} == 0 )); then
+    pass "生产配置不含 FILL_ 占位符"
+  else
+    fail "生产配置仍含 FILL_ 占位符：${placeholder_variables[*]}"
   fi
   persistence_mode="$(env_value "$ENV_FILE" FEISHU_PERSISTENCE_MODE)"
   if [[ "$persistence_mode" == "postgres-oss" ]]; then
@@ -364,6 +374,18 @@ if command -v curl >/dev/null 2>&1; then
     fail "OSS endpoint 格式不安全或不受支持"
   else
     warn "没有生产 OSS endpoint，首次部署暂不探测"
+  fi
+fi
+
+if command -v git >/dev/null 2>&1; then
+  git_main="$(GIT_TERMINAL_PROMPT=0 timeout --signal=TERM --kill-after=5s 20s \
+    git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=15 \
+      ls-remote https://github.com/Dreamsmama/dlr-data-pipeline.git refs/heads/main \
+      2>/dev/null | awk 'NR == 1 {print $1}')" || git_main=""
+  if [[ "$git_main" =~ ^[0-9a-f]{40}$ ]]; then
+    pass "GitHub 远端 main 可通过强制 HTTP/1.1 获取"
+  else
+    fail "GitHub 远端 main 不可获取；生产入口不能确认最新代码"
   fi
 fi
 

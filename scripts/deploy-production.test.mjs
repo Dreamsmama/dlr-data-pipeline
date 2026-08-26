@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
-import { loadTargetProfile, parseArguments, validateOptions } from "./deploy-production.mjs";
+import {
+  loadTargetProfile,
+  parseArguments,
+  validateOptions,
+} from "./deploy-production.mjs";
 
 test("deploy is the default command", () => {
   const options = parseArguments([]);
@@ -59,4 +66,52 @@ test("public URL cannot carry credentials", () => {
 test("local quality checks are enabled unless explicitly skipped", () => {
   assert.equal(parseArguments([]).skipLocalChecks, false);
   assert.equal(parseArguments(["--skip-local-checks"]).skipLocalChecks, true);
+});
+
+test("production environment-specific values require manual configuration", () => {
+  const template = readFileSync(new URL("../deploy/.env.production.example", import.meta.url), "utf8");
+  for (const name of [
+    "WEB_ORIGIN",
+    "DATABASE_URL",
+    "ALIYUN_OSS_REGION",
+    "ALIYUN_OSS_ENDPOINT",
+    "ALIYUN_OSS_ACCESS_KEY_ID",
+    "ALIYUN_OSS_ACCESS_KEY_SECRET",
+    "ALIYUN_OSS_BUCKET_NAME",
+  ]) {
+    assert.match(template, new RegExp(`^${name}=FILL_`, "m"), `${name} must remain a manual placeholder`);
+  }
+});
+
+test("server entry has a deployment lock and per-run log", () => {
+  const script = readFileSync(new URL("../deploy.sh", import.meta.url), "utf8");
+  assert.match(script, /exec 9>"\$LOCK_FILE"/);
+  assert.match(script, /flock -n 9/);
+  assert.match(script, /\$\{COMMAND\}-\$\(date \+%Y%m%d-%H%M%S\)-\$\$\.log/);
+});
+
+test("production images are tagged and labeled with the Git Commit", () => {
+  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  const script = readFileSync(new URL("../deploy.sh", import.meta.url), "utf8");
+  assert.match(compose, /dlr-data-pipeline-api:\$\{DEPLOY_IMAGE_TAG:-latest\}/);
+  assert.match(compose, /dlr-data-pipeline-web:\$\{DEPLOY_IMAGE_TAG:-latest\}/);
+  assert.match(compose, /org\.opencontainers\.image\.revision: \$\{DEPLOY_GIT_COMMIT:-unknown\}/);
+  assert.match(script, /verify_built_image_commits/);
+});
+
+test("server deployment safeguards pass their shell behavior tests", () => {
+  let shell = "bash";
+  let args = ["deploy/server-deploy.test.sh"];
+  if (process.platform === "win32") {
+    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+    shell = join(programFiles, "Git", "bin", "bash.exe");
+    assert.equal(existsSync(shell), true, `Git Bash is required for deploy shell tests: ${shell}`);
+    args = ["-lc", "./deploy/server-deploy.test.sh"];
+  }
+  const result = spawnSync(shell, args, {
+    cwd: new URL("..", import.meta.url),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /server deploy safeguards: ok/);
 });

@@ -4,6 +4,8 @@
 
 - 服务器 SSH 别名：`wuyang`
 - 固定部署入口：`/opt/dlr-data-pipeline/deploy.sh`
+- 默认代码来源：`https://github.com/Dreamsmama/dlr-data-pipeline.git` 的远端 `main`
+- 服务器工作副本：`/opt/dlr-data-pipeline/repository`
 - 不可变发布目录：`/opt/dlr-data-pipeline/releases/<完整Git提交ID>`
 - 持久配置：`/opt/dlr-data-pipeline/shared/.env`
 - 持久数据：`/opt/dlr-data-pipeline/shared/data`
@@ -37,13 +39,21 @@ pnpm deploy:production -- preflight --server 121.199.52.72 --profile wuyang
 
 ## 首次初始化
 
-生产服务器应使用 SSH 密钥登录。本地确认代码已经人工验收、提交并位于 `main` 后执行：
+固定入口尚不存在时，只进行一次入口安装。先从已审核的代码工作区复制脚本：
 
 ```bash
-pnpm deploy:production -- bootstrap
+scp deploy.sh wuyang:/tmp/dlr-deploy.sh
 ```
 
-该命令安装服务器部署依赖并生成 `/opt/dlr-data-pipeline/shared/.env`，不会启动 DLR 或修改其他项目。登录服务器填写所有 `FILL_` 项，密钥不能提交到 Git、终端历史或群聊。
+再登录生产服务器安装固定入口并初始化：
+
+```bash
+sudo install -d -m 755 /opt/dlr-data-pipeline
+sudo install -m 755 /tmp/dlr-deploy.sh /opt/dlr-data-pipeline/deploy.sh
+sudo bash /opt/dlr-data-pipeline/deploy.sh bootstrap
+```
+
+bootstrap 安装 Git/Docker 等依赖，强制使用 HTTP/1.1 并带超时、低速保护和重试地获取远端 `main`。如果生产配置不存在，它会生成 `/opt/dlr-data-pipeline/shared/.env`、设置 `0600` 权限并以状态码 2 停止，不会启动 DLR 或修改其他项目。手工填写所有 `FILL_` 项后再执行日常发布；脚本不会自动填写或覆盖已有生产配置。密钥不能提交到 Git、终端历史或群聊。
 
 公网绑定还需要：
 
@@ -59,46 +69,46 @@ ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS=true
 ## 日常发布
 
 ```bash
-pnpm deploy:production
+sudo bash /opt/dlr-data-pipeline/deploy.sh
 ```
 
 一个命令会完成：
 
-1. 拒绝非 `main`、未提交或存在未跟踪文件的工作区。
-2. 在上传前执行单元测试和类型检查；服务器不可变镜像构建包含应用生产构建。
-3. 生成 Git archive 并验证 SHA-256，不依赖服务器访问 GitHub。
-4. 检查生产配置、端口、磁盘、内存和 Compose project。
-5. 构建不可变 API/Web 镜像，旧服务在构建期间继续运行。
-6. 创建并校验 PostgreSQL custom-format 全量备份。
-7. 拒绝未显式批准的破坏性 migration，再执行带 advisory lock 的幂等迁移。
-8. 切换容器，验证固定运行时、数据库、OSS、内部数据、电商数据和页面。
-9. 从部署电脑访问 `WEB_ORIGIN`，验证真实公网链路。
-10. 服务器内部验收失败时恢复切换前的代码镜像并重新健康检查。
+1. 创建本次独立日志并取得部署锁；另一个发布会立即被拒绝。
+2. 拒绝服务器代码仓库里的未提交或未跟踪文件。
+3. 对 GitHub 远端 `main` 执行精确 fetch；每次请求有硬超时和低速超时，强制 HTTP/1.1，默认最多尝试 5 次。
+4. 获取成功后用完整 Commit 生成 Git archive 和 SHA-256，再解包到不可变 release 目录；不会在可变仓库目录中运行应用。
+5. 检查生产配置中的全部 `FILL_`、端口、磁盘、内存和 Compose project。
+6. 以 Commit 前 12 位标记不可变 API/Web 镜像，旧服务在构建期间继续运行。
+7. 创建并校验 PostgreSQL custom-format 全量备份。
+8. 拒绝未显式批准的破坏性 migration，再执行带 advisory lock 的幂等迁移。
+9. 切换容器，验证固定运行时、数据库、OSS、内部数据、电商数据和页面。
+10. 新版本内部健康失败时保留失败 release、Commit 镜像和独立日志，重新创建旧 Commit 镜像并做基础健康检查。
+
+GitHub 暂时不可访问时，`pnpm deploy:production` 是应急制品上传入口，只部署发布电脑当前已经确认的干净 `main`。它仍使用相同的 Commit、SHA-256、部署锁、备份和回滚流程，但日常发布不要使用它绕过远端 `main`。
 
 公网验收失败不会自动回滚服务器内部健康的版本，因为安全组或公网链路失败不代表应用版本损坏；命令仍返回失败，要求人工处理入口。
 
 ## 验收、状态和回滚
 
 ```bash
-pnpm deploy:production -- verify
-pnpm deploy:production -- status
-pnpm deploy:production -- rollback <Git提交前缀>
+sudo bash /opt/dlr-data-pipeline/deploy.sh verify
+sudo bash /opt/dlr-data-pipeline/deploy.sh status
+sudo bash /opt/dlr-data-pipeline/deploy.sh rollback <Git提交前缀>
 ```
 
 `verify` 会执行数据库和 OSS 临时写入/清理深度检查。`rollback` 只回滚代码镜像，不自动逆转数据库结构，因此 migration 必须始终向前兼容。
 
-确实需要跳过部署电脑的公网检查时必须显式使用：
+确实需要从发布电脑进行外网链路验收时，可继续使用：
 
 ```bash
-pnpm deploy:production -- verify --skip-public-verify
+pnpm deploy:production -- verify
 ```
 
-## 直接服务器操作（故障处理）
+## 应急制品上传
 
 ```bash
-bash /opt/dlr-data-pipeline/deploy.sh status
-bash /opt/dlr-data-pipeline/deploy.sh verify
-bash /opt/dlr-data-pipeline/deploy.sh rollback <Git提交前缀>
+pnpm deploy:production -- deploy
 ```
 
-不要直接编辑 release 目录。配置和数据只允许修改 `shared`，失败时首先查看脚本输出的独立日志路径。
+该入口会先执行本地测试与类型检查，再上传带完整 Commit 和 SHA-256 的制品。不要直接编辑服务器 `repository` 或 `releases`；配置和数据只允许修改 `shared`，失败时首先查看脚本输出的独立日志路径。

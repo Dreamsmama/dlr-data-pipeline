@@ -18,14 +18,18 @@ PREVIOUS_VERSION_FILE="${SHARED_DIR}/previous-version"
 LOCK_FILE="${INSTALL_ROOT}/deploy.lock"
 LAUNCHER_PATH="${INSTALL_ROOT}/deploy.sh"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-dlr-data-pipeline}"
+REPOSITORY_DIR="${DEPLOY_REPOSITORY_DIR:-${INSTALL_ROOT}/repository}"
+REPOSITORY_URL="${DEPLOY_REPOSITORY_URL:-https://github.com/Dreamsmama/dlr-data-pipeline.git}"
+GIT_BRANCH="main"
+GIT_NETWORK_RETRIES="${DEPLOY_GIT_NETWORK_RETRIES:-5}"
+GIT_NETWORK_TIMEOUT_SECONDS="${DEPLOY_GIT_NETWORK_TIMEOUT_SECONDS:-45}"
 SOURCE_ARCHIVE="${DEPLOY_SOURCE_ARCHIVE:-}"
 SOURCE_VERSION="${DEPLOY_SOURCE_VERSION:-}"
 SOURCE_SHA256="${DEPLOY_SOURCE_SHA256:-}"
 SOURCE_BRANCH="${DEPLOY_SOURCE_BRANCH:-main}"
 
-COMMAND="${1:-deploy}"
-if (( $# > 0 )); then shift; fi
-ROLLBACK_VERSION="${1:-}"
+COMMAND="deploy"
+ROLLBACK_VERSION=""
 
 COMPOSE_FILE=""
 RELEASE_DIR=""
@@ -44,31 +48,13 @@ Usage: deploy.sh <command> [version]
 
 Commands:
   bootstrap          Install host prerequisites and create the production env template
-  deploy             Build, back up, migrate, switch, and verify an uploaded release
+  deploy             Fetch remote main, build, back up, migrate, switch, and verify (default)
   verify             Verify the currently deployed release
   status             Show the current release, resources, and container state
   rollback <version> Switch to a retained release and verify it
   public-url         Print the configured non-secret WEB_ORIGIN
 EOF
 }
-
-if [[ ! "$COMMAND" =~ ^(bootstrap|deploy|verify|status|rollback|public-url)$ ]]; then
-  usage >&2
-  exit 64
-fi
-if [[ "$COMMAND" == "rollback" && -z "$ROLLBACK_VERSION" ]]; then
-  usage >&2
-  exit 64
-fi
-if [[ "${EUID}" -ne 0 ]]; then
-  printf '请使用 root 运行部署脚本\n' >&2
-  exit 1
-fi
-
-mkdir -p "$INSTALL_ROOT" "$SHARED_DIR" "$DATA_DIR" "$BACKUP_DIR" "$LOG_DIR" \
-  "$METADATA_DIR" "$INCOMING_DIR" "$RELEASES_DIR"
-LOG_FILE="${LOG_DIR}/${COMMAND}-$(date +%Y%m%d-%H%M%S).log"
-exec > >(tee -a "$LOG_FILE") 2>&1
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -139,7 +125,7 @@ install_host_prerequisites() {
   log "检查服务器部署依赖"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git iproute2 tar util-linux
+    ca-certificates coreutils curl git iproute2 tar util-linux
   if ! command -v docker >/dev/null 2>&1; then
     local installer="/tmp/${APP_NAME}-get-docker.$$"
     log "安装 Docker Engine"
@@ -153,7 +139,7 @@ install_host_prerequisites() {
 check_host_prerequisites() {
   local missing=()
   local command
-  for command in curl docker flock sha256sum tar ss awk sed grep find sort; do
+  for command in curl docker flock git sha256sum tar timeout ss awk sed grep find sort; do
     command -v "$command" >/dev/null 2>&1 || missing+=("$command")
   done
   if (( ${#missing[@]} > 0 )); then
@@ -163,10 +149,116 @@ check_host_prerequisites() {
   docker compose version >/dev/null
 }
 
+validate_git_source_config() {
+  if [[ ! "$REPOSITORY_URL" =~ ^https://[A-Za-z0-9._:-]+/[A-Za-z0-9._/-]+(\.git)?$ ]]; then
+    log "DEPLOY_REPOSITORY_URL 必须是不含账号、密码、查询参数的 HTTPS Git 地址"
+    return 2
+  fi
+  if [[ ! "$GIT_NETWORK_RETRIES" =~ ^[1-9][0-9]*$ ]] || (( GIT_NETWORK_RETRIES > 20 )); then
+    log "DEPLOY_GIT_NETWORK_RETRIES 必须是 1-20 的整数"
+    return 2
+  fi
+  if [[ ! "$GIT_NETWORK_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+    || (( GIT_NETWORK_TIMEOUT_SECONDS < 10 || GIT_NETWORK_TIMEOUT_SECONDS > 600 )); then
+    log "DEPLOY_GIT_NETWORK_TIMEOUT_SECONDS 必须是 10-600 的整数"
+    return 2
+  fi
+}
+
+git_network() {
+  local attempt status wait_seconds
+  for ((attempt = 1; attempt <= GIT_NETWORK_RETRIES; attempt += 1)); do
+    log "GitHub 请求：attempt=${attempt}/${GIT_NETWORK_RETRIES} timeout=${GIT_NETWORK_TIMEOUT_SECONDS}s http=HTTP/1.1"
+    if GIT_TERMINAL_PROMPT=0 timeout --signal=TERM --kill-after=5s \
+      "${GIT_NETWORK_TIMEOUT_SECONDS}s" \
+      git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=20 "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt == GIT_NETWORK_RETRIES )); then
+      log "GitHub 请求在 ${GIT_NETWORK_RETRIES} 次尝试后失败（exit=${status}）；拒绝使用缓存版本"
+      return "$status"
+    fi
+    wait_seconds=$((attempt * 5))
+    (( wait_seconds > 30 )) && wait_seconds=30
+    log "GitHub 请求失败（exit=${status}），${wait_seconds} 秒后重试"
+    sleep "$wait_seconds"
+  done
+}
+
+prepare_git_release() {
+  local configured_remote commit archive_path temporary_archive
+  validate_git_source_config
+  mkdir -p "$REPOSITORY_DIR"
+  if [[ -e "${REPOSITORY_DIR}/.git" ]]; then
+    configured_remote="$(git -C "$REPOSITORY_DIR" remote get-url origin 2>/dev/null || true)"
+    if [[ "$configured_remote" != "$REPOSITORY_URL" ]]; then
+      log "服务器代码仓库 origin 与 DEPLOY_REPOSITORY_URL 不一致；拒绝静默改写"
+      return 1
+    fi
+    if [[ -n "$(git -C "$REPOSITORY_DIR" status --porcelain --untracked-files=all)" ]]; then
+      log "服务器代码仓库存在未提交或未跟踪文件；请人工确认，脚本不会覆盖"
+      return 1
+    fi
+  else
+    if [[ -n "$(find "$REPOSITORY_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      log "代码仓库目录非空但不是 Git 仓库：${REPOSITORY_DIR}"
+      return 1
+    fi
+    git init --quiet --initial-branch="$GIT_BRANCH" "$REPOSITORY_DIR"
+    git -C "$REPOSITORY_DIR" remote add origin "$REPOSITORY_URL"
+  fi
+
+  git_network -C "$REPOSITORY_DIR" fetch --depth=1 --prune --no-tags origin \
+    "+refs/heads/${GIT_BRANCH}:refs/remotes/origin/${GIT_BRANCH}"
+  commit="$(git -C "$REPOSITORY_DIR" rev-parse --verify "refs/remotes/origin/${GIT_BRANCH}^{commit}")"
+  if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    log "远端 main 没有解析为完整 Git Commit"
+    return 1
+  fi
+
+  git -C "$REPOSITORY_DIR" checkout --quiet --force -B "$GIT_BRANCH" "$commit"
+  if [[ "$(git -C "$REPOSITORY_DIR" rev-parse HEAD)" != "$commit" ]] \
+    || [[ -n "$(git -C "$REPOSITORY_DIR" status --porcelain --untracked-files=all)" ]]; then
+    log "服务器 main 工作副本未能稳定指向远端 Commit"
+    return 1
+  fi
+
+  archive_path="${INCOMING_DIR}/${commit}.tar.gz"
+  temporary_archive="${archive_path}.create.$$"
+  rm -f -- "$temporary_archive"
+  git -C "$REPOSITORY_DIR" archive --format=tar.gz --output="$temporary_archive" "$commit"
+  mv -f -- "$temporary_archive" "$archive_path"
+
+  SOURCE_ARCHIVE="$archive_path"
+  SOURCE_VERSION="$commit"
+  SOURCE_SHA256="$(sha256sum "$archive_path" | awk '{print $1}')"
+  SOURCE_BRANCH="$GIT_BRANCH"
+  log "已锁定远端 main：commit=${SOURCE_VERSION} artifact_sha256=${SOURCE_SHA256}"
+  prepare_archive_release
+}
+
+prepare_source_release() {
+  local supplied=0
+  [[ -n "$SOURCE_ARCHIVE" ]] && supplied=$((supplied + 1))
+  [[ -n "$SOURCE_VERSION" ]] && supplied=$((supplied + 1))
+  [[ -n "$SOURCE_SHA256" ]] && supplied=$((supplied + 1))
+  if (( supplied == 0 )); then
+    prepare_git_release
+  elif (( supplied == 3 )); then
+    log "使用应急上传制品：commit=${SOURCE_VERSION} branch=${SOURCE_BRANCH}"
+    prepare_archive_release
+  else
+    log "应急制品模式必须同时提供 DEPLOY_SOURCE_ARCHIVE、DEPLOY_SOURCE_VERSION 和 DEPLOY_SOURCE_SHA256"
+    return 2
+  fi
+}
+
 prepare_archive_release() {
   local archive_path archive_listing calculated_sha release_dir temporary_dir
   if [[ -z "$SOURCE_ARCHIVE" || -z "$SOURCE_VERSION" || -z "$SOURCE_SHA256" ]]; then
-    log "deploy/bootstrap 必须由本地入口提供制品、提交 ID 和 SHA-256"
+    log "应急制品缺少文件、提交 ID 或 SHA-256"
     return 1
   fi
   if [[ ! "$SOURCE_VERSION" =~ ^[0-9a-f]{40}$ || ! "$SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
@@ -225,9 +317,10 @@ validate_config() {
     chmod 600 "$ENV_FILE"
     log "已将生产配置权限修正为 0600"
   fi
-  if grep -Eq '^[A-Z0-9_]+=FILL_' "$ENV_FILE"; then
+  if grep -Eq '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*FILL_[A-Za-z0-9_]*' "$ENV_FILE"; then
     log "生产配置仍有未填写项："
-    grep -E '^[A-Z0-9_]+=FILL_' "$ENV_FILE" | cut -d= -f1
+    grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*FILL_[A-Za-z0-9_]*' "$ENV_FILE" \
+      | cut -d= -f1 | sed 's/^[[:space:]]*//' | sort -u
     return 2
   fi
   for required in DATABASE_URL ALIYUN_OSS_REGION ALIYUN_OSS_ACCESS_KEY_ID \
@@ -383,6 +476,7 @@ restore_old_release() {
     RELEASE_DIR="$OLD_RELEASE"
     COMPOSE_FILE="${OLD_RELEASE}/docker-compose.yml"
     export DEPLOY_IMAGE_TAG="${OLD_VERSION:0:12}"
+    export DEPLOY_GIT_COMMIT="$OLD_VERSION"
     compose up --detach --no-build --force-recreate api web
     if wait_basic_application; then
       ln -sfn "$OLD_RELEASE" "$CURRENT_RELEASE_LINK"
@@ -399,6 +493,19 @@ restore_old_release() {
   COMPOSE_FILE="$failed_compose_file"
 }
 
+verify_built_image_commits() {
+  local service image actual
+  for service in api web; do
+    image="${APP_NAME}-${service}:${SOURCE_VERSION:0:12}"
+    actual="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
+    if [[ "$actual" != "$SOURCE_VERSION" ]]; then
+      log "镜像 Commit 标签不一致：image=${image}"
+      return 1
+    fi
+  done
+  log "API/Web 镜像已使用完整 Git Commit 标记：${SOURCE_VERSION}"
+}
+
 on_error() {
   local status=$?
   trap - ERR
@@ -406,8 +513,6 @@ on_error() {
   if [[ "$SWITCH_STARTED" == true ]]; then restore_old_release; fi
   exit "$status"
 }
-trap on_error ERR
-
 record_success() {
   local version="$1" release="$2" backup_file="${3:-}" previous_version="$4"
   local metadata="${METADATA_DIR}/${version}.metadata"
@@ -498,26 +603,41 @@ show_status() {
     set_release_context "$current_release"
     validate_config
     export DEPLOY_IMAGE_TAG="${current:0:12}"
+    export DEPLOY_GIT_COMMIT="$current"
     compose ps
   fi
 }
 
+run_command() {
 case "$COMMAND" in
   bootstrap)
     acquire_lock
     install_host_prerequisites
-    prepare_archive_release
-    if ensure_config_template; then :; else
-      status=$?
-      [[ "$status" == 2 ]] || exit "$status"
+    prepare_source_release
+    config_status=0
+    ensure_config_template || config_status=$?
+    if (( config_status == 2 )); then
+      log "初始化已停止：请手工填写 ${ENV_FILE} 后重新执行 deploy"
+      exit 2
+    elif (( config_status != 0 )); then
+      exit "$config_status"
     fi
-    log "初始化完成。填写 ${ENV_FILE} 后执行 deploy；本命令没有启动或修改现有业务容器"
+    validate_config
+    log "初始化完成。生产配置已通过检查；执行 deploy 才会启动或修改本项目容器"
     ;;
 
   deploy)
     acquire_lock
     check_host_prerequisites
-    prepare_archive_release
+    prepare_source_release
+    config_status=0
+    ensure_config_template || config_status=$?
+    if (( config_status == 2 )); then
+      log "部署已停止：请手工填写 ${ENV_FILE} 中全部 FILL_ 项后重试"
+      exit 2
+    elif (( config_status != 0 )); then
+      exit "$config_status"
+    fi
     validate_config
     OLD_RELEASE="$(resolve_link "$CURRENT_RELEASE_LINK")"
     OLD_VERSION="$(read_version_file "$CURRENT_VERSION_FILE")"
@@ -525,9 +645,11 @@ case "$COMMAND" in
     preflight_resources
     validate_migration_safety
     export DEPLOY_IMAGE_TAG="${SOURCE_VERSION:0:12}"
+    export DEPLOY_GIT_COMMIT="$SOURCE_VERSION"
 
     log "构建不可变镜像：commit=${SOURCE_VERSION} branch=${SOURCE_BRANCH}"
     compose build --pull api web
+    verify_built_image_commits
     backup_database
     log "执行幂等数据库 migration"
     compose run --rm --no-deps migrate
@@ -542,7 +664,11 @@ case "$COMMAND" in
     SWITCH_STARTED=false
     cleanup_backups
     cleanup_releases
-    rm -f -- "$(readlink -f "$SOURCE_ARCHIVE")"
+    source_archive_path="$(readlink -f "$SOURCE_ARCHIVE")"
+    case "$source_archive_path" in
+      "$INCOMING_DIR"/*) rm -f -- "$source_archive_path" ;;
+      *) log "跳过不安全的制品清理目标：${source_archive_path}" ;;
+    esac
     log "部署成功：commit=${SOURCE_VERSION} url=$(env_value WEB_ORIGIN)"
     compose ps
     ;;
@@ -555,6 +681,7 @@ case "$COMMAND" in
     validate_config
     current_version="$(read_version_file "$CURRENT_VERSION_FILE")"
     export DEPLOY_IMAGE_TAG="${current_version:0:12}"
+    export DEPLOY_GIT_COMMIT="$current_version"
     verify_release true
     ;;
 
@@ -576,6 +703,7 @@ case "$COMMAND" in
     docker image inspect "${APP_NAME}-api:${target_version:0:12}" >/dev/null
     docker image inspect "${APP_NAME}-web:${target_version:0:12}" >/dev/null
     export DEPLOY_IMAGE_TAG="${target_version:0:12}"
+    export DEPLOY_GIT_COMMIT="$target_version"
     SWITCH_STARTED=true
     log "回滚代码到 ${target_version}；数据库结构不会自动逆转"
     compose up --detach --no-build --force-recreate api web
@@ -592,3 +720,38 @@ case "$COMMAND" in
     printf '\n'
     ;;
 esac
+}
+
+main() {
+  COMMAND="${1:-deploy}"
+  if (( $# > 0 )); then shift; fi
+  ROLLBACK_VERSION="${1:-}"
+  if (( $# > 1 )); then
+    usage >&2
+    return 64
+  fi
+  if [[ ! "$COMMAND" =~ ^(bootstrap|deploy|verify|status|rollback|public-url)$ ]]; then
+    usage >&2
+    return 64
+  fi
+  if [[ "$COMMAND" == "rollback" && -z "$ROLLBACK_VERSION" ]]; then
+    usage >&2
+    return 64
+  fi
+  if [[ "${EUID}" -ne 0 ]]; then
+    printf '请使用 root 运行部署脚本\n' >&2
+    return 1
+  fi
+
+  mkdir -p "$INSTALL_ROOT" "$SHARED_DIR" "$DATA_DIR" "$BACKUP_DIR" "$LOG_DIR" \
+    "$METADATA_DIR" "$INCOMING_DIR" "$RELEASES_DIR"
+  LOG_FILE="${LOG_DIR}/${COMMAND}-$(date +%Y%m%d-%H%M%S)-$$.log"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  log "部署日志：${LOG_FILE}"
+  trap on_error ERR
+  run_command
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

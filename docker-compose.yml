@@ -4,12 +4,17 @@ x-logging: &default-logging
     max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
     max-file: "${DOCKER_LOG_MAX_FILES:-5}"
 
+x-build-labels: &build-labels
+  org.opencontainers.image.revision: ${DEPLOY_GIT_COMMIT:-unknown}
+  org.opencontainers.image.source: https://github.com/Dreamsmama/dlr-data-pipeline
+
 services:
   api:
     image: dlr-data-pipeline-api:${DEPLOY_IMAGE_TAG:-latest}
     build:
       context: .
       target: api
+      labels: *build-labels
     env_file:
       - ${APP_ENV_FILE:-.env}
     environment:
@@ -43,6 +48,7 @@ services:
     build:
       context: .
       target: web
+      labels: *build-labels
     env_file:
       - ${APP_ENV_FILE:-.env}
     environment:
